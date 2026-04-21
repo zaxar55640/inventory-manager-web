@@ -21,7 +21,8 @@ app.use(express.json());
 
 app.get('/api/suppliers', (_req, res) => {
   const rows = db.prepare(`
-    SELECT supplier_name, COUNT(*) AS items_count, ROUND(SUM(to_order), 2) AS total_to_order
+    SELECT supplier_name, COUNT(*) AS items_count, ROUND(SUM(to_order), 2) AS total_to_order,
+           MAX(coverage_days) AS coverage_days
     FROM purchase_recommendations
     WHERE calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
       AND to_order > 0
@@ -43,6 +44,35 @@ app.get('/api/recommendations', (req, res) => {
     ORDER BY to_order DESC, sku_name ASC
   `).all(supplier);
   res.json(rows);
+});
+
+app.get('/api/search', (req, res) => {
+  const q = `%${String(req.query.q || '').trim()}%`;
+  if (q === '%%') return res.json([]);
+  const rows = db.prepare(`
+    SELECT id, supplier_name, sku_name, item_ref, norm_name, available_qty, to_order, recommended_stock,
+           demand_mode, coverage_days, coverage_source, system_note
+    FROM purchase_recommendations
+    WHERE calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
+      AND (sku_name LIKE ? OR norm_name LIKE ? OR item_ref LIKE ?)
+    ORDER BY to_order DESC, sku_name ASC
+    LIMIT 30
+  `).all(q, q, q);
+  res.json(rows);
+});
+
+app.post('/api/coverage/supplier', (req, res) => {
+  const {supplier_name, coverage_days} = req.body;
+  if (!supplier_name) return res.status(400).send('supplier_name required');
+  db.prepare('UPDATE suppliers SET coverage_days = ? WHERE supplier_name = ?').run(coverage_days ?? null, supplier_name);
+  res.json({ok: true});
+});
+
+app.post('/api/coverage/product', (req, res) => {
+  const {norm_name, coverage_days} = req.body;
+  if (!norm_name) return res.status(400).send('norm_name required');
+  db.prepare('UPDATE products SET coverage_days = ? WHERE norm_name = ?').run(coverage_days ?? null, norm_name);
+  res.json({ok: true});
 });
 
 app.get('/api/orders', (_req, res) => {

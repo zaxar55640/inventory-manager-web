@@ -60,10 +60,22 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
 .orders-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
 .order-tile { padding: 20px; display: flex; justify-content: space-between; gap: 16px; align-items: end; }
 .status-badge { display: inline-flex; padding: 6px 10px; border-radius: 999px; background: rgba(112,224,181,.14); color: var(--mint); margin-bottom: 10px; }
+.hero-stack { align-items: stretch; }
+.inline-block { display: grid; gap: 8px; }
+.search-card { padding: 24px; margin-bottom: 22px; }
+.search-input { width: 100%; margin: 12px 0 16px; }
+.search-results { display: grid; gap: 12px; }
+.search-item { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.03); }
+.coverage-box { display: grid; gap: 8px; min-width: 140px; }
+.mini-actions { display: flex; gap: 8px; }
+.ghost-btn { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.small { padding: 8px 10px; font-size: 12px; }
+.section-head { margin-bottom: 12px; }
 @media (max-width: 980px) {
   .shell { grid-template-columns: 1fr; }
   .rail { border-right: none; border-bottom: 1px solid var(--line); }
   .hero { flex-direction: column; align-items: stretch; }
   .hero-controls { flex-direction: column; }
   .hero-controls label { min-width: 0; }
+  .search-item { flex-direction: column; align-items: stretch; }
 }

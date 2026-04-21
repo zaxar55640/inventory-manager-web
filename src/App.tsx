@@ -1,7 +1,7 @@
 import {useEffect, useMemo, useState} from 'react';
 import {apiUrl} from './config';
 
-type Supplier = {supplier_name: string; items_count: number; total_to_order: number};
+type Supplier = {supplier_name: string; items_count: number; total_to_order: number; coverage_days?: number | null};
 type Recommendation = {
   id: number;
   supplier_name: string;
@@ -36,6 +36,10 @@ export function App() {
   const [orders, setOrders] = useState<OrderBatch[]>([]);
   const [tab, setTab] = useState<'create' | 'orders'>('create');
   const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<Recommendation[]>([]);
+  const [supplierCoverageInput, setSupplierCoverageInput] = useState<string>('');
+  const [productCoverageInputs, setProductCoverageInputs] = useState<Record<string, string>>({});
 
   async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
     const res = await fetch(url, {
@@ -46,16 +50,28 @@ export function App() {
     return res.json();
   }
 
+  async function loadSuppliers() {
+    const data = await fetchJSON<Supplier[]>(apiUrl('/api/suppliers'));
+    setSuppliers(data);
+    if (!selectedSupplier && data[0]) setSelectedSupplier(data[0].supplier_name);
+  }
+
+  async function loadOrders() {
+    setOrders(await fetchJSON<OrderBatch[]>(apiUrl('/api/orders')));
+  }
+
   useEffect(() => {
     const tg = (window as any).Telegram?.WebApp;
     tg?.ready?.();
     tg?.expand?.();
-    fetchJSON<Supplier[]>(apiUrl('/api/suppliers')).then((data) => {
-      setSuppliers(data);
-      if (data[0]) setSelectedSupplier(data[0].supplier_name);
-    });
-    fetchJSON<OrderBatch[]>(apiUrl('/api/orders')).then(setOrders);
+    loadSuppliers();
+    loadOrders();
   }, []);
+
+  useEffect(() => {
+    const selected = suppliers.find((s) => s.supplier_name === selectedSupplier);
+    setSupplierCoverageInput(selected?.coverage_days != null ? String(selected.coverage_days) : '');
+  }, [suppliers, selectedSupplier]);
 
   useEffect(() => {
     if (!selectedSupplier) return;
@@ -64,13 +80,28 @@ export function App() {
       .then((rows) => {
         setRecommendations(rows);
         const next: Record<number, DraftLine> = {};
+        const coverageInputs: Record<string, string> = {};
         rows.forEach((row) => {
-          next[row.id] = { ...row, manager_qty: row.to_order, reason: '' };
+          next[row.id] = {...row, manager_qty: row.to_order, reason: ''};
+          coverageInputs[row.norm_name] = String(row.coverage_days ?? '');
         });
         setDraft(next);
+        setProductCoverageInputs(coverageInputs);
       })
       .finally(() => setLoading(false));
   }, [selectedSupplier]);
+
+  useEffect(() => {
+    const q = search.trim();
+    if (q.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      fetchJSON<Recommendation[]>(apiUrl(`/api/search?q=${encodeURIComponent(q)}`)).then(setSearchResults);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const summary = useMemo(() => {
     const rows = Object.values(draft);
@@ -83,6 +114,55 @@ export function App() {
 
   function updateLine(id: number, patch: Partial<DraftLine>) {
     setDraft((prev) => ({...prev, [id]: {...prev[id], ...patch}}));
+  }
+
+  function addToDraft(row: Recommendation) {
+    setSelectedSupplier(row.supplier_name);
+    setDraft((prev) => ({
+      ...prev,
+      [row.id]: prev[row.id] ?? {...row, manager_qty: row.to_order, reason: ''}
+    }));
+  }
+
+  async function confirmSupplierCoverage() {
+    if (!selectedSupplier) return;
+    const value = supplierCoverageInput.trim();
+    const label = value ? `${value} дней` : 'пропуск / null';
+    if (!confirm(`Подтвердить coverage для поставщика ${selectedSupplier}: ${label}?`)) return;
+    await fetchJSON(apiUrl('/api/coverage/supplier'), {
+      method: 'POST',
+      body: JSON.stringify({supplier_name: selectedSupplier, coverage_days: value ? Number(value) : null})
+    });
+    await loadSuppliers();
+    const rows = await fetchJSON<Recommendation[]>(apiUrl(`/api/recommendations?supplier=${encodeURIComponent(selectedSupplier)}`));
+    setRecommendations(rows);
+    const next: Record<number, DraftLine> = {};
+    rows.forEach((row) => {
+      const existing = draft[row.id];
+      next[row.id] = existing ? {...existing, coverage_days: row.coverage_days, coverage_source: row.coverage_source} : {...row, manager_qty: row.to_order, reason: ''};
+    });
+    setDraft(next);
+  }
+
+  async function confirmProductCoverage(row: Recommendation) {
+    const value = (productCoverageInputs[row.norm_name] ?? '').trim();
+    const label = value ? `${value} дней` : 'пропуск / null';
+    if (!confirm(`Подтвердить coverage для товара "${row.sku_name}": ${label}?`)) return;
+    await fetchJSON(apiUrl('/api/coverage/product'), {
+      method: 'POST',
+      body: JSON.stringify({norm_name: row.norm_name, coverage_days: value ? Number(value) : null})
+    });
+    const rows = await fetchJSON<Recommendation[]>(apiUrl(`/api/recommendations?supplier=${encodeURIComponent(selectedSupplier)}`));
+    setRecommendations(rows);
+    const next: Record<number, DraftLine> = {};
+    const coverageInputs: Record<string, string> = {};
+    rows.forEach((item) => {
+      const existing = draft[item.id];
+      next[item.id] = existing ? {...existing, coverage_days: item.coverage_days, coverage_source: item.coverage_source, to_order: item.to_order, recommended_stock: item.recommended_stock} : {...item, manager_qty: item.to_order, reason: ''};
+      coverageInputs[item.norm_name] = String(item.coverage_days ?? '');
+    });
+    setDraft(next);
+    setProductCoverageInputs(coverageInputs);
   }
 
   async function createOrder() {
@@ -98,13 +178,13 @@ export function App() {
       reason: row.reason,
     }))};
     await fetchJSON(apiUrl('/api/orders'), {method: 'POST', body: JSON.stringify(payload)});
-    setOrders(await fetchJSON<OrderBatch[]>(apiUrl('/api/orders')));
+    await loadOrders();
     setTab('orders');
   }
 
   async function markDone(id: number) {
     await fetchJSON(apiUrl(`/api/orders/${id}/complete`), {method: 'POST'});
-    setOrders(await fetchJSON<OrderBatch[]>(apiUrl('/api/orders')));
+    await loadOrders();
   }
 
   return (
@@ -134,9 +214,9 @@ export function App() {
               <div>
                 <span className="eyebrow">Режим создания</span>
                 <h2>Собери заявку по поставщику</h2>
-                <p>Менеджер меняет количество, объясняет отклонения и формирует финальную заявку.</p>
+                <p>Менеджер может искать товар, вручную добавлять его в заявку и менять покрытие в днях с подтверждением.</p>
               </div>
-              <div className="hero-controls">
+              <div className="hero-controls hero-stack">
                 <label>
                   <span>Поставщик</span>
                   <select value={selectedSupplier} onChange={(e) => setSelectedSupplier(e.target.value)}>
@@ -147,8 +227,41 @@ export function App() {
                     ))}
                   </select>
                 </label>
+                <div className="inline-block">
+                  <label>
+                    <span>Coverage дней у поставщика</span>
+                    <input placeholder="например 14" value={supplierCoverageInput} onChange={(e) => setSupplierCoverageInput(e.target.value)} />
+                  </label>
+                  <div className="mini-actions">
+                    <button className="primary ghost" onClick={confirmSupplierCoverage}>Подтвердить</button>
+                    <button className="ghost-btn" onClick={() => setSupplierCoverageInput('')}>Пропустить</button>
+                  </div>
+                </div>
                 <button className="primary" onClick={createOrder}>Создать заявку</button>
               </div>
+            </section>
+
+            <section className="card search-card">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Ручное добавление</span>
+                  <h2>Поиск товара</h2>
+                </div>
+              </div>
+              <input className="search-input" placeholder="Введи часть названия товара" value={search} onChange={(e) => setSearch(e.target.value)} />
+              {searchResults.length > 0 && (
+                <div className="search-results">
+                  {searchResults.map((row) => (
+                    <div key={row.id} className="search-item">
+                      <div>
+                        <strong>{row.sku_name}</strong>
+                        <div className="meta">{row.supplier_name} · рекомендовано {row.to_order} · остаток {row.available_qty}</div>
+                      </div>
+                      <button className="primary ghost" onClick={() => addToDraft(row)}>Добавить</button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
 
             <section className="card table-card">
@@ -161,42 +274,50 @@ export function App() {
                         <th>Система</th>
                         <th>Менеджер</th>
                         <th>Остаток</th>
-                        <th>Покрытие</th>
+                        <th>Coverage</th>
                         <th>Причина изменения</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {recommendations.map((row) => {
-                        const line = draft[row.id];
-                        return (
-                          <tr key={row.id}>
-                            <td>
-                              <div className="sku">{row.sku_name}</div>
-                              <div className="meta">{row.item_ref || row.norm_name} · {row.demand_mode}</div>
-                            </td>
-                            <td>
-                              <strong>{row.to_order}</strong>
-                              <div className="meta">цель {row.recommended_stock}</div>
-                            </td>
-                            <td>
-                              <input type="number" min={0} value={line?.manager_qty ?? row.to_order}
-                                onChange={(e) => updateLine(row.id, {manager_qty: Number(e.target.value)})} />
-                            </td>
-                            <td>{row.available_qty}</td>
-                            <td>
+                      {Object.values(draft).filter((row) => row.supplier_name === selectedSupplier).map((row) => (
+                        <tr key={row.id}>
+                          <td>
+                            <div className="sku">{row.sku_name}</div>
+                            <div className="meta">{row.item_ref || row.norm_name} · {row.demand_mode}</div>
+                          </td>
+                          <td>
+                            <strong>{row.to_order}</strong>
+                            <div className="meta">цель {row.recommended_stock}</div>
+                          </td>
+                          <td>
+                            <input type="number" min={0} value={draft[row.id]?.manager_qty ?? row.to_order}
+                              onChange={(e) => updateLine(row.id, {manager_qty: Number(e.target.value)})} />
+                          </td>
+                          <td>{row.available_qty}</td>
+                          <td>
+                            <div className="coverage-box">
                               <strong>{row.coverage_days}</strong>
                               <div className="meta">{row.coverage_source}</div>
-                            </td>
-                            <td>
-                              <textarea
-                                placeholder="Обязательно, если количество изменено"
-                                value={line?.reason ?? ''}
-                                onChange={(e) => updateLine(row.id, {reason: e.target.value})}
+                              <input
+                                placeholder="дни"
+                                value={productCoverageInputs[row.norm_name] ?? ''}
+                                onChange={(e) => setProductCoverageInputs((prev) => ({...prev, [row.norm_name]: e.target.value}))}
                               />
-                            </td>
-                          </tr>
-                        );
-                      })}
+                              <div className="mini-actions">
+                                <button className="primary ghost small" onClick={() => confirmProductCoverage(row)}>Подтвердить</button>
+                                <button className="ghost-btn small" onClick={() => setProductCoverageInputs((prev) => ({...prev, [row.norm_name]: ''}))}>Пропустить</button>
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <textarea
+                              placeholder="Обязательно, если количество изменено"
+                              value={draft[row.id]?.reason ?? ''}
+                              onChange={(e) => updateLine(row.id, {reason: e.target.value})}
+                            />
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
