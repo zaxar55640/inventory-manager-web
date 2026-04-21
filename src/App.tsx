@@ -27,6 +27,7 @@ type OrderBatch = {
 };
 
 type CreateMode = 'single' | 'multi';
+type CreateStep = 'choose-mode' | 'compose' | 'draft';
 const currency = new Intl.NumberFormat('ru-RU');
 
 export function App() {
@@ -38,6 +39,7 @@ export function App() {
   const [tab, setTab] = useState<'create' | 'drafts' | 'orders'>('create');
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<CreateMode>('single');
+  const [createStep, setCreateStep] = useState<CreateStep>('choose-mode');
   const [listSearch, setListSearch] = useState('');
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<Recommendation[]>([]);
@@ -134,7 +136,8 @@ export function App() {
     setDraft((prev) => ({...prev, [row.id]: prev[row.id] ?? {...row, manager_qty: row.to_order, reason: '', added_manually: true}}));
     setJustAddedIds((prev) => [row.id, ...prev.filter((id) => id !== row.id)].slice(0, 8));
     setTimeout(() => setJustAddedIds((prev) => prev.filter((id) => id !== row.id)), 3000);
-    setTab('drafts');
+    setCreateStep('draft');
+    setTab('create');
     if (mode === 'single') setSelectedSupplier(row.supplier_name);
   }
 
@@ -201,7 +204,7 @@ export function App() {
           <p>Создание заявок по одному или нескольким поставщикам.</p>
         </div>
         <div className="panel">
-          <button className={tab === 'create' ? 'tab active' : 'tab'} onClick={() => setTab('create')}>Новая заявка</button>
+          <button className={tab === 'create' ? 'tab active' : 'tab'} onClick={() => { setTab('create'); setCreateStep('choose-mode'); }}>Новая заявка</button>
           <button className={tab === 'drafts' ? 'tab active' : 'tab'} onClick={() => setTab('drafts')}>Список драфтов</button>
           <button className={tab === 'orders' ? 'tab active' : 'tab'} onClick={() => setTab('orders')}>Список заявок</button>
         </div>
@@ -216,21 +219,30 @@ export function App() {
       <main className="main">
         {tab === 'create' && (
           <>
-            <section className="hero card">
-              <div>
-                <span className="eyebrow">Шаг 1</span>
-                <h2>Создание заявки</h2>
-                <p>Сначала выбери режим: один поставщик или несколько поставщиков.</p>
-              </div>
-              <div className="mode-switch">
-                <button className={mode === 'single' ? 'tab active' : 'tab'} onClick={() => setMode('single')}>Один поставщик</button>
-                <button className={mode === 'multi' ? 'tab active' : 'tab'} onClick={() => setMode('multi')}>Несколько поставщиков</button>
-              </div>
-            </section>
+            {createStep === 'choose-mode' && (
+              <section className="hero card">
+                <div>
+                  <span className="eyebrow">Шаг 1</span>
+                  <h2>Какая именно заявка?</h2>
+                  <p>Сначала выбери тип заявки, а уже потом откроется меню составления.</p>
+                </div>
+                <div className="step-cards">
+                  <button className="step-card" onClick={() => { setMode('single'); setCreateStep('compose'); }}>
+                    <strong>Один поставщик</strong>
+                    <span>Покажем товары конкретного поставщика и поиск внутри списка.</span>
+                  </button>
+                  <button className="step-card" onClick={() => { setMode('multi'); setCreateStep('compose'); }}>
+                    <strong>Несколько поставщиков</strong>
+                    <span>Откроем поиск по товарам + фильтр по поставщикам.</span>
+                  </button>
+                </div>
+              </section>
+            )}
 
-            {mode === 'single' ? (
+            {createStep === 'compose' && mode === 'single' && (
               <>
                 <section className="card search-card">
+                  <div className="section-head"><div><span className="eyebrow">Шаг 2</span><h2>Составление заявки по одному поставщику</h2></div></div>
                   <div className="inline-grid">
                     <label>
                       <span>Поставщик</span>
@@ -283,40 +295,59 @@ export function App() {
                   )}
                 </section>
               </>
-            ) : (
-              <>
-                <section className="card search-card">
-                  <div className="inline-grid">
-                    <label>
-                      <span>Поиск по товарам</span>
-                      <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Введи название товара" />
-                    </label>
-                    <label>
-                      <span>Фильтр по поставщику</span>
-                      <select value={searchSupplierFilter} onChange={(e) => setSearchSupplierFilter(e.target.value)}>
-                        <option value="">Все поставщики</option>
-                        {suppliers.map((s) => <option key={s.supplier_name} value={s.supplier_name}>{s.supplier_name}</option>)}
-                      </select>
-                    </label>
-                  </div>
-                  <div className="search-results">
-                    {searchResults.map((row) => (
-                      <div key={row.id} className={justAddedIds.includes(row.id) ? 'search-item added' : 'search-item'}>
-                        <div>
-                          <strong>{row.sku_name}</strong>
-                          <div className="meta">{row.supplier_name} · рекомендовано {row.to_order} шт · остаток {row.available_qty}</div>
-                        </div>
-                        <button className="primary ghost" onClick={() => addToDraft(row)}>{justAddedIds.includes(row.id) ? 'Добавлено' : 'Добавить'}</button>
+            )}
+
+            {createStep === 'compose' && mode === 'multi' && (
+              <section className="card search-card">
+                <div className="section-head"><div><span className="eyebrow">Шаг 2</span><h2>Составление мультизаявки</h2></div></div>
+                <div className="inline-grid">
+                  <label>
+                    <span>Поиск по товарам</span>
+                    <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Введи название товара" />
+                  </label>
+                  <label>
+                    <span>Фильтр по поставщику</span>
+                    <select value={searchSupplierFilter} onChange={(e) => setSearchSupplierFilter(e.target.value)}>
+                      <option value="">Все поставщики</option>
+                      {suppliers.map((s) => <option key={s.supplier_name} value={s.supplier_name}>{s.supplier_name}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="search-results">
+                  {searchResults.map((row) => (
+                    <div key={row.id} className={justAddedIds.includes(row.id) ? 'search-item added' : 'search-item'}>
+                      <div>
+                        <strong>{row.sku_name}</strong>
+                        <div className="meta">{row.supplier_name} · рекомендовано {row.to_order} шт · остаток {row.available_qty}</div>
                       </div>
-                    ))}
-                  </div>
-                </section>
-              </>
+                      <button className="primary ghost" onClick={() => addToDraft(row)}>{justAddedIds.includes(row.id) ? 'Добавлено' : 'Добавить'}</button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {createStep === 'draft' && (
+              <section className="card orders-card">
+                <div className="section-head"><div><span className="eyebrow">Шаг 3</span><h2>Драфт заявки</h2></div></div>
+                <div className="search-results">
+                  {Object.values(draft).map((row) => (
+                    <div key={row.id} className="search-item">
+                      <div>
+                        <strong>{row.sku_name}</strong>
+                        <div className="meta">{row.supplier_name} · менеджер {row.manager_qty} · система {row.to_order}</div>
+                      </div>
+                      <button className="danger-btn" onClick={() => removeFromDraft(row.id)}>🗑</button>
+                    </div>
+                  ))}
+                </div>
+              </section>
             )}
 
             <section className="card footer-actions">
-              <button className="primary" onClick={() => setTab('drafts')}>Перейти в драфты</button>
-              <button className="primary ghost" onClick={createOrder}>Создать заявку</button>
+              {createStep !== 'choose-mode' && <button className="ghost-btn" onClick={() => setCreateStep('choose-mode')}>Назад к выбору типа</button>}
+              {createStep === 'compose' && <button className="primary" onClick={() => setCreateStep('draft')}>Открыть драфт</button>}
+              {createStep === 'draft' && <button className="primary ghost" onClick={createOrder}>Создать заявку</button>}
             </section>
           </>
         )}
