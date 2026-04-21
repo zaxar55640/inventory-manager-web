@@ -53,12 +53,30 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
 .search-item { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.03); }
 .search-item.added { border-color: rgba(112,224,181,.45); background: linear-gradient(135deg, rgba(112,224,181,.12), rgba(240,195,107,.08)); }
 .orders-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
-.order-tile { padding: 20px; display: flex; justify-content: space-between; gap: 16px; align-items: end; }
+.order-tile { padding: 20px; display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: start; overflow: hidden; }
+.order-tile h3, .order-tile p { margin: 0 0 8px; }
+.order-tile .inline-actions { flex-wrap: wrap; justify-content: flex-end; }
 .status-badge { display: inline-flex; padding: 6px 10px; border-radius: 999px; background: rgba(112,224,181,.14); color: var(--mint); margin-bottom: 10px; }
-.footer-actions { display: flex; gap: 12px; justify-content: flex-end; }
+.footer-actions { display: flex; gap: 12px; justify-content: flex-end; flex-wrap: wrap; }
+.main, .card, .panel, .order-tile, .search-item, .step-card, .tab, button, input, select, textarea { position: relative; }
+button, .tab, .step-card { touch-action: manipulation; }
 @media (max-width: 980px) {
   .shell { grid-template-columns: 1fr; }
-  .rail { border-right: none; border-bottom: 1px solid var(--line); }
+  .rail { border-right: none; border-bottom: 1px solid var(--line); padding: 18px; }
+  .main { padding: 16px; }
   .hero, .mode-switch, .inline-grid, .inline-actions, .search-item, .footer-actions { display: grid; }
   .inline-grid { grid-template-columns: 1fr; }
+  .search-item { align-items: stretch; }
+  .order-tile { grid-template-columns: 1fr; }
+  .order-tile .inline-actions { justify-content: stretch; }
+  .order-tile .inline-actions > * { width: 100%; }
+  table { min-width: 860px; }
+}
+@media (max-width: 640px) {
+  .card, .panel, .order-tile { border-radius: 18px; }
+  .hero, .table-card, .orders-card, .search-card, .footer-actions { padding: 16px; }
+  .step-cards { grid-template-columns: 1fr; min-width: 0; }
+  .search-item { padding: 12px; }
+  .tab, .primary, .ghost-btn, .icon-btn, .danger-btn { min-height: 44px; }
+  textarea { min-width: 0; width: 100%; }
 }
