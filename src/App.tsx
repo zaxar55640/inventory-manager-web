@@ -21,7 +21,7 @@ type OrderBatch = {id: number; supplier_name: string; status: string; created_at
 type DraftItem = {id: number; recommendation_id: number; item_ref: string; sku_name: string; norm_name: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string};
 type DraftDetail = {batch: DraftSummary; items: DraftItem[]};
 type OrderDetail = {batch: {id: number; supplier_name: string; status: string; created_at: string}; items: Array<{id:number; sku_name:string; item_ref:string; recommended_qty:number; manager_qty:number; final_qty:number; reason:string; item_status:string}>};
-type NonLiquidItem = {store: string; store_ref: string; item_ref: string; sku_name: string; norm_name: string; subgroup: string; available_qty: number; sales_qty_4m: number; last_sale_date: string | null};
+type NonLiquidItem = {store: string; store_ref: string; item_ref: string; sku_name: string; norm_name: string; subgroup: string; available_qty: number; sales_qty_4m: number; last_sale_date: string | null; days_since_last_sale: number | null};
 
 type CreateMode = 'single' | 'multi';
 const currency = new Intl.NumberFormat('ru-RU');
@@ -47,6 +47,7 @@ export function App() {
   const [nonLiquidGroup, setNonLiquidGroup] = useState('');
   const [nonLiquidSearch, setNonLiquidSearch] = useState('');
   const [loading, setLoading] = useState(false);
+  const [nonLiquidLoading, setNonLiquidLoading] = useState(false);
 
   async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
     const res = await fetch(url, {headers: {'Content-Type': 'application/json'}, ...options});
@@ -61,12 +62,24 @@ export function App() {
   }
   async function loadOrders() { setOrders(await fetchJSON<OrderBatch[]>(apiUrl('/api/orders'))); }
   async function loadDrafts() { setDrafts(await fetchJSON<DraftSummary[]>(apiUrl('/api/drafts'))); }
-  async function loadNonLiquidGroups() { setNonLiquidGroups(await fetchJSON<string[]>(apiUrl('/api/non-liquid/groups'))); }
+  async function loadNonLiquidGroups() {
+    setNonLiquidLoading(true);
+    try {
+      setNonLiquidGroups(await fetchJSON<string[]>(apiUrl('/api/non-liquid/groups')));
+    } finally {
+      setNonLiquidLoading(false);
+    }
+  }
   async function loadNonLiquidItems(group = nonLiquidGroup, q = nonLiquidSearch) {
     const params = new URLSearchParams();
     if (group) params.set('subgroup', group);
     if (q.trim()) params.set('q', q.trim());
-    setNonLiquidItems(await fetchJSON<NonLiquidItem[]>(apiUrl(`/api/non-liquid${params.toString() ? `?${params.toString()}` : ''}`)));
+    setNonLiquidLoading(true);
+    try {
+      setNonLiquidItems(await fetchJSON<NonLiquidItem[]>(apiUrl(`/api/non-liquid${params.toString() ? `?${params.toString()}` : ''}`)));
+    } finally {
+      setNonLiquidLoading(false);
+    }
   }
 
   async function openDraft(id: number) {
@@ -249,8 +262,9 @@ export function App() {
               <label><span>Фильтр по группе</span><select value={nonLiquidGroup} onChange={(e)=>setNonLiquidGroup(e.target.value)}><option value="">Все группы</option>{nonLiquidGroups.map((g)=><option key={g} value={g}>{g}</option>)}</select></label>
               <label><span>Поиск по товару</span><input value={nonLiquidSearch} onChange={(e)=>setNonLiquidSearch(e.target.value)} placeholder="Название / артикул" /></label>
             </div>
-            <div className="table-wrap"><table><thead><tr><th>Группа</th><th>Товар</th><th>Остаток</th><th>Продажи 4 мес</th><th>Последняя продажа</th><th>Магазин</th></tr></thead><tbody>
-              {nonLiquidItems.map((row, idx)=><tr key={`${row.norm_name}-${row.store_ref}-${idx}`}><td>{row.subgroup || 'Без группы'}</td><td><div className="sku">{row.sku_name}</div><div className="meta">{row.item_ref || '—'}</div></td><td>{currency.format(row.available_qty || 0)}</td><td>{currency.format(row.sales_qty_4m || 0)}</td><td>{row.last_sale_date ? new Date(row.last_sale_date).toLocaleDateString('ru-RU') : 'не было'}</td><td>{row.store}</td></tr>)}
+            {nonLiquidLoading && <div className="loading-block"><div className="spinner" /><span>Загружаю неликвиды…</span></div>}
+            <div className="table-wrap table-scroll-hint"><table><thead><tr><th>Группа</th><th>Товар</th><th>Остаток</th><th>Продажи 4 мес</th><th>Последняя продажа</th><th>Дней назад</th><th>Магазин</th></tr></thead><tbody>
+              {nonLiquidItems.map((row, idx)=><tr key={`${row.norm_name}-${row.store_ref}-${idx}`}><td>{row.subgroup || 'Без группы'}</td><td><div className="sku">{row.sku_name}</div><div className="meta">{row.item_ref || '—'}</div></td><td>{currency.format(row.available_qty || 0)}</td><td>{currency.format(row.sales_qty_4m || 0)}</td><td>{row.last_sale_date ? new Date(row.last_sale_date).toLocaleDateString('ru-RU') : 'не было'}</td><td>{row.days_since_last_sale != null ? `${row.days_since_last_sale} дн.` : '—'}</td><td>{row.store}</td></tr>)}
             </tbody></table></div>
           </section>
         )}

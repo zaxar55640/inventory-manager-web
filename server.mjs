@@ -134,7 +134,11 @@ app.get('/api/non-liquid', (req, res) => {
       ls.subgroup,
       ls.available_qty,
       COALESCE(s4.sales_qty_4m, 0) AS sales_qty_4m,
-      sa.last_sale_date
+      sa.last_sale_date,
+      CASE
+        WHEN sa.last_sale_date IS NULL THEN NULL
+        ELSE CAST(julianday('now') - julianday(sa.last_sale_date) AS INTEGER)
+      END AS days_since_last_sale
     FROM latest_stock ls
     LEFT JOIN sales_4m s4 ON s4.norm_name = ls.norm_name AND s4.store_ref = ls.store_ref
     LEFT JOIN sales_all sa ON sa.norm_name = ls.norm_name AND sa.store_ref = ls.store_ref
