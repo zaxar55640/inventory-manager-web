@@ -16,7 +16,7 @@ type Recommendation = {
   coverage_source: string;
   system_note: string;
 };
-type DraftLine = Recommendation & {manager_qty: number; reason: string};
+type DraftLine = Recommendation & {manager_qty: number; reason: string; added_manually?: boolean};
 type OrderBatch = {
   id: number;
   supplier_name: string;
@@ -26,6 +26,7 @@ type OrderBatch = {
   total_qty: number;
 };
 
+type CreateMode = 'single' | 'multi';
 const currency = new Intl.NumberFormat('ru-RU');
 
 export function App() {
@@ -34,18 +35,19 @@ export function App() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [draft, setDraft] = useState<Record<number, DraftLine>>({});
   const [orders, setOrders] = useState<OrderBatch[]>([]);
-  const [tab, setTab] = useState<'create' | 'orders'>('create');
+  const [tab, setTab] = useState<'create' | 'drafts' | 'orders'>('create');
   const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<CreateMode>('single');
+  const [listSearch, setListSearch] = useState('');
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<Recommendation[]>([]);
+  const [searchSupplierFilter, setSearchSupplierFilter] = useState('');
   const [supplierCoverageInput, setSupplierCoverageInput] = useState<string>('');
   const [productCoverageInputs, setProductCoverageInputs] = useState<Record<string, string>>({});
+  const [justAddedIds, setJustAddedIds] = useState<number[]>([]);
 
   async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-    const res = await fetch(url, {
-      headers: {'Content-Type': 'application/json'},
-      ...options,
-    });
+    const res = await fetch(url, {headers: {'Content-Type': 'application/json'}, ...options});
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   }
@@ -74,110 +76,113 @@ export function App() {
   }, [suppliers, selectedSupplier]);
 
   useEffect(() => {
-    if (!selectedSupplier) return;
+    if (!selectedSupplier || mode !== 'single') return;
     setLoading(true);
     fetchJSON<Recommendation[]>(apiUrl(`/api/recommendations?supplier=${encodeURIComponent(selectedSupplier)}`))
       .then((rows) => {
         setRecommendations(rows);
-        const next: Record<number, DraftLine> = {};
-        const coverageInputs: Record<string, string> = {};
-        rows.forEach((row) => {
-          next[row.id] = {...row, manager_qty: row.to_order, reason: ''};
-          coverageInputs[row.norm_name] = String(row.coverage_days ?? '');
+        setDraft((prev) => {
+          const next = {...prev};
+          rows.forEach((row) => {
+            if (!next[row.id]) next[row.id] = {...row, manager_qty: row.to_order, reason: '', added_manually: false};
+          });
+          return next;
         });
-        setDraft(next);
-        setProductCoverageInputs(coverageInputs);
+        const coverageInputs: Record<string, string> = {};
+        rows.forEach((row) => { coverageInputs[row.norm_name] = String(row.coverage_days ?? ''); });
+        setProductCoverageInputs((prev) => ({...prev, ...coverageInputs}));
       })
       .finally(() => setLoading(false));
-  }, [selectedSupplier]);
+  }, [selectedSupplier, mode]);
 
   useEffect(() => {
     const q = search.trim();
-    if (q.length < 2) {
-      setSearchResults([]);
-      return;
-    }
+    if (q.length < 2) { setSearchResults([]); return; }
     const t = setTimeout(() => {
-      fetchJSON<Recommendation[]>(apiUrl(`/api/search?q=${encodeURIComponent(q)}`)).then(setSearchResults);
+      fetchJSON<Recommendation[]>(apiUrl(`/api/search?q=${encodeURIComponent(q)}`)).then((rows) => {
+        const filtered = searchSupplierFilter ? rows.filter((r) => r.supplier_name === searchSupplierFilter) : rows;
+        setSearchResults(filtered);
+      });
     }, 250);
     return () => clearTimeout(t);
-  }, [search]);
+  }, [search, searchSupplierFilter]);
+
+  const visibleDraftRows = useMemo(() => {
+    const rows = Object.values(draft);
+    if (mode === 'single') {
+      return rows
+        .filter((row) => row.supplier_name === selectedSupplier)
+        .filter((row) => row.sku_name.toLowerCase().includes(listSearch.toLowerCase()));
+    }
+    return rows.filter((row) => row.sku_name.toLowerCase().includes(listSearch.toLowerCase()));
+  }, [draft, selectedSupplier, listSearch, mode]);
 
   const summary = useMemo(() => {
-    const rows = Object.values(draft);
+    const rows = visibleDraftRows;
     return {
       items: rows.length,
       totalQty: rows.reduce((sum, row) => sum + Number(row.manager_qty || 0), 0),
       changed: rows.filter((row) => Number(row.manager_qty) !== Number(row.to_order)).length,
     };
-  }, [draft]);
+  }, [visibleDraftRows]);
 
   function updateLine(id: number, patch: Partial<DraftLine>) {
     setDraft((prev) => ({...prev, [id]: {...prev[id], ...patch}}));
   }
 
   function addToDraft(row: Recommendation) {
-    setSelectedSupplier(row.supplier_name);
-    setDraft((prev) => ({
-      ...prev,
-      [row.id]: prev[row.id] ?? {...row, manager_qty: row.to_order, reason: ''}
-    }));
+    setDraft((prev) => ({...prev, [row.id]: prev[row.id] ?? {...row, manager_qty: row.to_order, reason: '', added_manually: true}}));
+    setJustAddedIds((prev) => [row.id, ...prev.filter((id) => id !== row.id)].slice(0, 8));
+    setTimeout(() => setJustAddedIds((prev) => prev.filter((id) => id !== row.id)), 3000);
+    setTab('drafts');
+    if (mode === 'single') setSelectedSupplier(row.supplier_name);
+  }
+
+  function removeFromDraft(id: number) {
+    setDraft((prev) => {
+      const next = {...prev};
+      delete next[id];
+      return next;
+    });
   }
 
   async function confirmSupplierCoverage() {
     if (!selectedSupplier) return;
     const value = supplierCoverageInput.trim();
-    const label = value ? `${value} дней` : 'пропуск / null';
+    const label = value ? `${value} дней` : 'пропустить';
     if (!confirm(`Подтвердить coverage для поставщика ${selectedSupplier}: ${label}?`)) return;
     await fetchJSON(apiUrl('/api/coverage/supplier'), {
-      method: 'POST',
-      body: JSON.stringify({supplier_name: selectedSupplier, coverage_days: value ? Number(value) : null})
+      method: 'POST', body: JSON.stringify({supplier_name: selectedSupplier, coverage_days: value ? Number(value) : null})
     });
     await loadSuppliers();
-    const rows = await fetchJSON<Recommendation[]>(apiUrl(`/api/recommendations?supplier=${encodeURIComponent(selectedSupplier)}`));
-    setRecommendations(rows);
-    const next: Record<number, DraftLine> = {};
-    rows.forEach((row) => {
-      const existing = draft[row.id];
-      next[row.id] = existing ? {...existing, coverage_days: row.coverage_days, coverage_source: row.coverage_source} : {...row, manager_qty: row.to_order, reason: ''};
-    });
-    setDraft(next);
   }
 
-  async function confirmProductCoverage(row: Recommendation) {
+  async function confirmProductCoverage(row: DraftLine) {
     const value = (productCoverageInputs[row.norm_name] ?? '').trim();
-    const label = value ? `${value} дней` : 'пропуск / null';
+    const label = value ? `${value} дней` : 'пропустить';
     if (!confirm(`Подтвердить coverage для товара "${row.sku_name}": ${label}?`)) return;
     await fetchJSON(apiUrl('/api/coverage/product'), {
-      method: 'POST',
-      body: JSON.stringify({norm_name: row.norm_name, coverage_days: value ? Number(value) : null})
+      method: 'POST', body: JSON.stringify({norm_name: row.norm_name, coverage_days: value ? Number(value) : null})
     });
-    const rows = await fetchJSON<Recommendation[]>(apiUrl(`/api/recommendations?supplier=${encodeURIComponent(selectedSupplier)}`));
-    setRecommendations(rows);
-    const next: Record<number, DraftLine> = {};
-    const coverageInputs: Record<string, string> = {};
-    rows.forEach((item) => {
-      const existing = draft[item.id];
-      next[item.id] = existing ? {...existing, coverage_days: item.coverage_days, coverage_source: item.coverage_source, to_order: item.to_order, recommended_stock: item.recommended_stock} : {...item, manager_qty: item.to_order, reason: ''};
-      coverageInputs[item.norm_name] = String(item.coverage_days ?? '');
-    });
-    setDraft(next);
-    setProductCoverageInputs(coverageInputs);
+    updateLine(row.id, {coverage_days: value ? Number(value) : row.coverage_days, coverage_source: value ? 'product' : row.coverage_source});
   }
 
   async function createOrder() {
-    const lines = Object.values(draft).filter((row) => Number(row.manager_qty) > 0);
+    const lines = visibleDraftRows.filter((row) => Number(row.manager_qty) > 0);
     const invalid = lines.find((row) => Number(row.manager_qty) !== Number(row.to_order) && !row.reason.trim());
-    if (invalid) {
-      alert('Если количество изменено, нужно написать объяснение.');
-      return;
+    if (invalid) return alert('Если количество изменено, нужно написать объяснение.');
+    const grouped = new Map<string, DraftLine[]>();
+    for (const row of lines) {
+      const key = row.supplier_name;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)!.push(row);
     }
-    const payload = {supplier_name: selectedSupplier, items: lines.map((row) => ({
-      recommendation_id: row.id,
-      manager_qty: Number(row.manager_qty),
-      reason: row.reason,
-    }))};
-    await fetchJSON(apiUrl('/api/orders'), {method: 'POST', body: JSON.stringify(payload)});
+    for (const [supplier, items] of grouped) {
+      await fetchJSON(apiUrl('/api/orders'), {
+        method: 'POST',
+        body: JSON.stringify({supplier_name: supplier, items: items.map((row) => ({recommendation_id: row.id, manager_qty: Number(row.manager_qty), reason: row.reason}))})
+      });
+    }
     await loadOrders();
     setTab('orders');
   }
@@ -193,10 +198,11 @@ export function App() {
         <div className="brand">
           <span className="eyebrow">Telegram Web App</span>
           <h1>Zakup Manager</h1>
-          <p>Панель менеджера для ручной сборки заявок по поставщикам.</p>
+          <p>Создание заявок по одному или нескольким поставщикам.</p>
         </div>
         <div className="panel">
-          <button className={tab === 'create' ? 'tab active' : 'tab'} onClick={() => setTab('create')}>Создать заявку</button>
+          <button className={tab === 'create' ? 'tab active' : 'tab'} onClick={() => setTab('create')}>Новая заявка</button>
+          <button className={tab === 'drafts' ? 'tab active' : 'tab'} onClick={() => setTab('drafts')}>Список драфтов</button>
           <button className={tab === 'orders' ? 'tab active' : 'tab'} onClick={() => setTab('orders')}>Список заявок</button>
         </div>
         <div className="panel stat-grid">
@@ -208,130 +214,133 @@ export function App() {
       </aside>
 
       <main className="main">
-        {tab === 'create' ? (
+        {tab === 'create' && (
           <>
             <section className="hero card">
               <div>
-                <span className="eyebrow">Режим создания</span>
-                <h2>Собери заявку по поставщику</h2>
-                <p>Менеджер может искать товар, вручную добавлять его в заявку и менять покрытие в днях с подтверждением.</p>
+                <span className="eyebrow">Шаг 1</span>
+                <h2>Создание заявки</h2>
+                <p>Сначала выбери режим: один поставщик или несколько поставщиков.</p>
               </div>
-              <div className="hero-controls hero-stack">
-                <label>
-                  <span>Поставщик</span>
-                  <select value={selectedSupplier} onChange={(e) => setSelectedSupplier(e.target.value)}>
-                    {suppliers.map((s) => (
-                      <option key={s.supplier_name} value={s.supplier_name}>
-                        {s.supplier_name} · {currency.format(s.total_to_order)} шт
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <div className="inline-block">
-                  <label>
-                    <span>Coverage дней у поставщика</span>
-                    <input placeholder="например 14" value={supplierCoverageInput} onChange={(e) => setSupplierCoverageInput(e.target.value)} />
-                  </label>
-                  <div className="mini-actions">
-                    <button className="primary ghost" onClick={confirmSupplierCoverage}>Подтвердить</button>
-                    <button className="ghost-btn" onClick={() => setSupplierCoverageInput('')}>Пропустить</button>
-                  </div>
-                </div>
-                <button className="primary" onClick={createOrder}>Создать заявку</button>
+              <div className="mode-switch">
+                <button className={mode === 'single' ? 'tab active' : 'tab'} onClick={() => setMode('single')}>Один поставщик</button>
+                <button className={mode === 'multi' ? 'tab active' : 'tab'} onClick={() => setMode('multi')}>Несколько поставщиков</button>
               </div>
             </section>
 
-            <section className="card search-card">
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">Ручное добавление</span>
-                  <h2>Поиск товара</h2>
-                </div>
-              </div>
-              <input className="search-input" placeholder="Введи часть названия товара" value={search} onChange={(e) => setSearch(e.target.value)} />
-              {searchResults.length > 0 && (
-                <div className="search-results">
-                  {searchResults.map((row) => (
-                    <div key={row.id} className="search-item">
-                      <div>
-                        <strong>{row.sku_name}</strong>
-                        <div className="meta">{row.supplier_name} · рекомендовано {row.to_order} · остаток {row.available_qty}</div>
+            {mode === 'single' ? (
+              <>
+                <section className="card search-card">
+                  <div className="inline-grid">
+                    <label>
+                      <span>Поставщик</span>
+                      <select value={selectedSupplier} onChange={(e) => setSelectedSupplier(e.target.value)}>
+                        {suppliers.map((s) => <option key={s.supplier_name} value={s.supplier_name}>{s.supplier_name}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Поиск внутри списка</span>
+                      <input value={listSearch} onChange={(e) => setListSearch(e.target.value)} placeholder="Название товара" />
+                    </label>
+                    <label>
+                      <span>Coverage дней у поставщика</span>
+                      <div className="inline-actions">
+                        <input value={supplierCoverageInput} onChange={(e) => setSupplierCoverageInput(e.target.value)} placeholder="14" />
+                        <button className="icon-btn" onClick={confirmSupplierCoverage}>✎</button>
+                        <button className="ghost-btn" onClick={() => setSupplierCoverageInput('')}>Пропустить</button>
                       </div>
-                      <button className="primary ghost" onClick={() => addToDraft(row)}>Добавить</button>
+                    </label>
+                  </div>
+                </section>
+                <section className="card table-card">
+                  {loading ? <p>Загружаю…</p> : (
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr><th>Товар</th><th>Система</th><th>Менеджер</th><th>Остаток</th><th>Coverage</th><th>Действия</th><th>Причина</th></tr>
+                        </thead>
+                        <tbody>
+                          {visibleDraftRows.map((row) => (
+                            <tr key={row.id}>
+                              <td><div className="sku">{row.sku_name}</div><div className="meta">{row.demand_mode}</div></td>
+                              <td><strong>{row.to_order}</strong><div className="meta">реком. {row.recommended_stock}</div></td>
+                              <td><input type="number" min={0} value={row.manager_qty} onChange={(e) => updateLine(row.id, {manager_qty: Number(e.target.value)})} /></td>
+                              <td>{row.available_qty}</td>
+                              <td>
+                                <div className="meta-row"><span>{row.coverage_days} дн</span><button className="icon-btn small" onClick={() => confirmProductCoverage(row)}>✎</button></div>
+                                <div className="inline-actions compact">
+                                  <input value={productCoverageInputs[row.norm_name] ?? ''} onChange={(e) => setProductCoverageInputs((prev) => ({...prev, [row.norm_name]: e.target.value}))} placeholder="дни" />
+                                  <button className="ghost-btn small" onClick={() => setProductCoverageInputs((prev) => ({...prev, [row.norm_name]: ''}))}>Пропустить</button>
+                                </div>
+                              </td>
+                              <td><button className="danger-btn" onClick={() => removeFromDraft(row.id)}>🗑</button></td>
+                              <td><textarea value={row.reason} onChange={(e) => updateLine(row.id, {reason: e.target.value})} placeholder="если меняешь количество" /></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
-                  ))}
-                </div>
-              )}
-            </section>
+                  )}
+                </section>
+              </>
+            ) : (
+              <>
+                <section className="card search-card">
+                  <div className="inline-grid">
+                    <label>
+                      <span>Поиск по товарам</span>
+                      <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Введи название товара" />
+                    </label>
+                    <label>
+                      <span>Фильтр по поставщику</span>
+                      <select value={searchSupplierFilter} onChange={(e) => setSearchSupplierFilter(e.target.value)}>
+                        <option value="">Все поставщики</option>
+                        {suppliers.map((s) => <option key={s.supplier_name} value={s.supplier_name}>{s.supplier_name}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="search-results">
+                    {searchResults.map((row) => (
+                      <div key={row.id} className={justAddedIds.includes(row.id) ? 'search-item added' : 'search-item'}>
+                        <div>
+                          <strong>{row.sku_name}</strong>
+                          <div className="meta">{row.supplier_name} · рекомендовано {row.to_order} шт · остаток {row.available_qty}</div>
+                        </div>
+                        <button className="primary ghost" onClick={() => addToDraft(row)}>{justAddedIds.includes(row.id) ? 'Добавлено' : 'Добавить'}</button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </>
+            )}
 
-            <section className="card table-card">
-              {loading ? <p>Загружаю рекомендации…</p> : (
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Товар</th>
-                        <th>Система</th>
-                        <th>Менеджер</th>
-                        <th>Остаток</th>
-                        <th>Coverage</th>
-                        <th>Причина изменения</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.values(draft).filter((row) => row.supplier_name === selectedSupplier).map((row) => (
-                        <tr key={row.id}>
-                          <td>
-                            <div className="sku">{row.sku_name}</div>
-                            <div className="meta">{row.item_ref || row.norm_name} · {row.demand_mode}</div>
-                          </td>
-                          <td>
-                            <strong>{row.to_order}</strong>
-                            <div className="meta">цель {row.recommended_stock}</div>
-                          </td>
-                          <td>
-                            <input type="number" min={0} value={draft[row.id]?.manager_qty ?? row.to_order}
-                              onChange={(e) => updateLine(row.id, {manager_qty: Number(e.target.value)})} />
-                          </td>
-                          <td>{row.available_qty}</td>
-                          <td>
-                            <div className="coverage-box">
-                              <strong>{row.coverage_days}</strong>
-                              <div className="meta">{row.coverage_source}</div>
-                              <input
-                                placeholder="дни"
-                                value={productCoverageInputs[row.norm_name] ?? ''}
-                                onChange={(e) => setProductCoverageInputs((prev) => ({...prev, [row.norm_name]: e.target.value}))}
-                              />
-                              <div className="mini-actions">
-                                <button className="primary ghost small" onClick={() => confirmProductCoverage(row)}>Подтвердить</button>
-                                <button className="ghost-btn small" onClick={() => setProductCoverageInputs((prev) => ({...prev, [row.norm_name]: ''}))}>Пропустить</button>
-                              </div>
-                            </div>
-                          </td>
-                          <td>
-                            <textarea
-                              placeholder="Обязательно, если количество изменено"
-                              value={draft[row.id]?.reason ?? ''}
-                              onChange={(e) => updateLine(row.id, {reason: e.target.value})}
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+            <section className="card footer-actions">
+              <button className="primary" onClick={() => setTab('drafts')}>Перейти в драфты</button>
+              <button className="primary ghost" onClick={createOrder}>Создать заявку</button>
             </section>
           </>
-        ) : (
+        )}
+
+        {tab === 'drafts' && (
           <section className="card orders-card">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">Заявки</span>
-                <h2>Созданные и выполненные</h2>
-              </div>
+            <div className="section-head"><div><span className="eyebrow">Драфты</span><h2>Текущие добавленные товары</h2></div></div>
+            <div className="search-results">
+              {Object.values(draft).map((row) => (
+                <div key={row.id} className="search-item">
+                  <div>
+                    <strong>{row.sku_name}</strong>
+                    <div className="meta">{row.supplier_name} · менеджер {row.manager_qty} · система {row.to_order}</div>
+                  </div>
+                  <button className="danger-btn" onClick={() => removeFromDraft(row.id)}>🗑</button>
+                </div>
+              ))}
             </div>
+          </section>
+        )}
+
+        {tab === 'orders' && (
+          <section className="card orders-card">
+            <div className="section-head"><div><span className="eyebrow">Заявки</span><h2>Созданные и выполненные</h2></div></div>
             <div className="orders-grid">
               {orders.map((order) => (
                 <article key={order.id} className="order-tile">
