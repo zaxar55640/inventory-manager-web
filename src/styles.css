@@ -10,11 +10,11 @@
   --rose: #f48fb1;
 }
 * { box-sizing: border-box; }
-body { margin: 0; font-family: 'Manrope', sans-serif; background: radial-gradient(circle at top left, rgba(240,195,107,.16), transparent 28%), radial-gradient(circle at bottom right, rgba(112,224,181,.14), transparent 22%), #0d1117; color: var(--text); }
+body { margin: 0; font-family: 'Manrope', sans-serif; background: radial-gradient(circle at top left, rgba(240,195,107,.16), transparent 28%), radial-gradient(circle at bottom right, rgba(112,224,181,.14), transparent 22%), #0d1117; color: var(--text); overflow-x: hidden; }
 button, input, select, textarea { font: inherit; }
-.shell { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; }
-.rail { padding: 28px; border-right: 1px solid var(--line); background: rgba(8,11,16,.65); backdrop-filter: blur(18px); }
-.main { padding: 28px; display: grid; gap: 22px; }
+.shell { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; position: relative; isolation: isolate; width: 100%; max-width: 100%; overflow-x: clip; }
+.rail { padding: 28px; border-right: 1px solid var(--line); background: rgba(8,11,16,.65); backdrop-filter: blur(18px); position: relative; z-index: 1; min-width: 0; }
+.main { padding: 28px; display: grid; gap: 22px; position: relative; z-index: 3; pointer-events: auto; min-width: 0; width: 100%; }
 .brand h1, .hero h2, .orders-card h2, .search-card h2 { font-family: 'Prata', serif; font-weight: 400; margin: 8px 0; }
 .eyebrow { text-transform: uppercase; letter-spacing: .18em; color: var(--gold); font-size: 11px; }
 .card, .panel, .order-tile { background: var(--panel); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 24px 80px rgba(0,0,0,.28); }
@@ -26,10 +26,10 @@ button, input, select, textarea { font: inherit; }
 .stat-grid span, .meta { color: var(--muted); font-size: 12px; }
 .stat-grid strong { display: block; margin-top: 8px; font-size: 22px; }
 .hero, .table-card, .orders-card, .search-card, .footer-actions { padding: 24px; }
-.hero { display: flex; justify-content: space-between; gap: 24px; align-items: end; }
+.hero { display: flex; justify-content: space-between; gap: 24px; align-items: end; min-width: 0; }
 .mode-switch { display: flex; gap: 12px; min-width: 320px; }
-.step-cards { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 14px; min-width: 480px; }
-.step-card { text-align: left; padding: 18px; border-radius: 20px; border: 1px solid var(--line); background: rgba(255,255,255,.03); color: var(--text); cursor: pointer; }
+.step-cards { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 14px; min-width: 0; width: 100%; }
+.step-card { text-align: left; padding: 18px; border-radius: 20px; border: 1px solid var(--line); background: rgba(255,255,255,.03); color: var(--text); cursor: pointer; position: relative; z-index: 6; pointer-events: auto; }
 .step-card strong { display: block; margin-bottom: 8px; font-size: 18px; }
 .step-card span { color: var(--muted); }
 .inline-grid { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 16px; }
@@ -62,9 +62,10 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
 button, .tab, .step-card { touch-action: manipulation; }
 @media (max-width: 980px) {
   .shell { grid-template-columns: 1fr; }
-  .rail { border-right: none; border-bottom: 1px solid var(--line); padding: 18px; }
-  .main { padding: 16px; }
+  .rail { border-right: none; border-bottom: 1px solid var(--line); padding: 18px; width: 100%; }
+  .main { padding: 16px; width: 100%; }
   .hero, .mode-switch, .inline-grid, .inline-actions, .search-item, .footer-actions { display: grid; }
+  .hero { align-items: stretch; }
   .inline-grid { grid-template-columns: 1fr; }
   .search-item { align-items: stretch; }
   .order-tile { grid-template-columns: 1fr; }
@@ -75,7 +76,14 @@ button, .tab, .step-card { touch-action: manipulation; }
 @media (max-width: 640px) {
   .card, .panel, .order-tile { border-radius: 18px; }
   .hero, .table-card, .orders-card, .search-card, .footer-actions { padding: 16px; }
-  .step-cards { grid-template-columns: 1fr; min-width: 0; }
+  .step-cards { grid-template-columns: 1fr; min-width: 0; width: 100%; }
+  .step-card,
+  .search-item,
+  .order-tile,
+  .inline-actions,
+  .inline-actions > *,
+  .order-tile .inline-actions,
+  .order-tile .inline-actions > * { width: 100%; max-width: 100%; }
   .search-item { padding: 12px; }
   .tab, .primary, .ghost-btn, .icon-btn, .danger-btn { min-height: 44px; }
   textarea { min-width: 0; width: 100%; }
