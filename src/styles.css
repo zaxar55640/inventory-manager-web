@@ -24,7 +24,6 @@ button, input, select, textarea { font: inherit; }
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .stat-grid div { padding: 14px; background: rgba(255,255,255,.03); border-radius: 16px; }
 .stat-grid span, .meta { color: var(--muted); font-size: 12px; }
-.helper-note { margin-top: 12px; }
 .stat-grid strong { display: block; margin-top: 8px; font-size: 22px; }
 .hero, .table-card, .orders-card, .search-card, .footer-actions { padding: 24px; }
 .hero { display: flex; justify-content: space-between; gap: 24px; align-items: end; min-width: 0; }
