@@ -27,7 +27,7 @@ type OrderBatch = {
 };
 
 type CreateMode = 'single' | 'multi';
-type CreateStep = 'choose-mode' | 'compose' | 'draft';
+type CreateStep = 'choose-mode' | 'compose';
 const currency = new Intl.NumberFormat('ru-RU');
 
 export function App() {
@@ -136,7 +136,7 @@ export function App() {
     setDraft((prev) => ({...prev, [row.id]: prev[row.id] ?? {...row, manager_qty: row.to_order, reason: '', added_manually: true}}));
     setJustAddedIds((prev) => [row.id, ...prev.filter((id) => id !== row.id)].slice(0, 8));
     setTimeout(() => setJustAddedIds((prev) => prev.filter((id) => id !== row.id)), 3000);
-    setCreateStep('draft');
+    setCreateStep('compose');
     setTab('create');
     if (mode === 'single') setSelectedSupplier(row.supplier_name);
   }
@@ -327,11 +327,11 @@ export function App() {
               </section>
             )}
 
-            {createStep === 'draft' && (
+            {createStep === 'compose' && (
               <section className="card orders-card">
-                <div className="section-head"><div><span className="eyebrow">Шаг 3</span><h2>Драфт заявки</h2></div></div>
+                <div className="section-head"><div><span className="eyebrow">Текущий состав</span><h2>Добавленные в заявку товары</h2></div></div>
                 <div className="search-results">
-                  {Object.values(draft).map((row) => (
+                  {Object.values(draft).filter((row) => mode === 'multi' || row.supplier_name === selectedSupplier).map((row) => (
                     <div key={row.id} className="search-item">
                       <div>
                         <strong>{row.sku_name}</strong>
@@ -346,15 +346,14 @@ export function App() {
 
             <section className="card footer-actions">
               {createStep !== 'choose-mode' && <button className="ghost-btn" onClick={() => setCreateStep('choose-mode')}>Назад к выбору типа</button>}
-              {createStep === 'compose' && <button className="primary" onClick={() => setCreateStep('draft')}>Открыть драфт</button>}
-              {createStep === 'draft' && <button className="primary ghost" onClick={createOrder}>Создать заявку</button>}
+              {createStep === 'compose' && <button className="primary ghost" onClick={createOrder}>Создать заявку</button>}
             </section>
           </>
         )}
 
         {tab === 'drafts' && (
           <section className="card orders-card">
-            <div className="section-head"><div><span className="eyebrow">Драфты</span><h2>Текущие добавленные товары</h2></div></div>
+            <div className="section-head"><div><span className="eyebrow">Драфты</span><h2>Незавершённые заявки</h2></div></div>
             <div className="search-results">
               {Object.values(draft).map((row) => (
                 <div key={row.id} className="search-item">
