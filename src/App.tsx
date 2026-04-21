@@ -249,6 +249,7 @@ export function App() {
               <label><span>Фильтр по группе</span><select value={nonLiquidGroup} onChange={(e)=>setNonLiquidGroup(e.target.value)}><option value="">Все группы</option>{nonLiquidGroups.map((g)=><option key={g} value={g}>{g}</option>)}</select></label>
               <label><span>Поиск по товару</span><input value={nonLiquidSearch} onChange={(e)=>setNonLiquidSearch(e.target.value)} placeholder="Название / артикул" /></label>
             </div>
+            {nonLiquidGroups.length <= 1 && <div className="meta helper-note">Сейчас в данных нет заполненных subgroup, поэтому доступна только группа «Без группы».</div>}
             <div className="table-wrap desktop-only"><table><thead><tr><th>Группа</th><th>Товар</th><th>Остаток</th><th>Продажи 4 мес</th><th>Последняя продажа</th><th>Магазин</th></tr></thead><tbody>
               {nonLiquidItems.map((row, idx)=><tr key={`${row.norm_name}-${row.store_ref}-${idx}`}><td>{row.subgroup || 'Без группы'}</td><td><div className="sku">{row.sku_name}</div><div className="meta">{row.item_ref || '—'}</div></td><td>{currency.format(row.available_qty || 0)}</td><td>{currency.format(row.sales_qty_4m || 0)}</td><td>{row.last_sale_date ? new Date(row.last_sale_date).toLocaleDateString('ru-RU') : 'не было'}</td><td>{row.store}</td></tr>)}
             </tbody></table></div>

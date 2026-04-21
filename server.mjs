@@ -87,7 +87,8 @@ app.get('/api/non-liquid/groups', (_req, res) => {
       AND COALESCE(available_qty, 0) > 0
     ORDER BY subgroup ASC
   `).all();
-  res.json(rows.map((r) => r.subgroup));
+  const groups = rows.map((r) => r.subgroup).filter(Boolean);
+  res.json(groups.length ? groups : ['Без группы']);
 });
 
 app.get('/api/non-liquid', (req, res) => {
