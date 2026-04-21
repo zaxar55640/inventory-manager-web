@@ -16,7 +16,7 @@ type Recommendation = {
   coverage_source: string;
   system_note: string;
 };
-type DraftLine = Recommendation & {manager_qty: number; reason: string};
+type DraftLine = Recommendation & {manager_qty: number; reason: string; added_manually?: boolean};
 type OrderBatch = {
   id: number;
   supplier_name: string;
@@ -82,7 +82,7 @@ export function App() {
         const next: Record<number, DraftLine> = {};
         const coverageInputs: Record<string, string> = {};
         rows.forEach((row) => {
-          next[row.id] = {...row, manager_qty: row.to_order, reason: ''};
+          next[row.id] = {...row, manager_qty: row.to_order, reason: '', added_manually: false};
           coverageInputs[row.norm_name] = String(row.coverage_days ?? '');
         });
         setDraft(next);
@@ -120,8 +120,12 @@ export function App() {
     setSelectedSupplier(row.supplier_name);
     setDraft((prev) => ({
       ...prev,
-      [row.id]: prev[row.id] ?? {...row, manager_qty: row.to_order, reason: ''}
+      [row.id]: prev[row.id] ?? {...row, manager_qty: row.to_order, reason: '', added_manually: true}
     }));
+    setRecommendations((prev) => {
+      if (prev.some((item) => item.id === row.id)) return prev;
+      return [row, ...prev];
+    });
   }
 
   async function confirmSupplierCoverage() {
@@ -262,6 +266,27 @@ export function App() {
                   ))}
                 </div>
               )}
+            </section>
+
+            <section className="card search-card added-card">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Добавлено вручную</span>
+                  <h2>Товары в текущем драфте</h2>
+                </div>
+              </div>
+              <div className="chips-wrap">
+                {Object.values(draft).filter((row) => row.supplier_name === selectedSupplier).slice(0, 24).map((row) => {
+                  return (
+                    <div key={row.id} className={row.added_manually ? 'draft-chip manual' : 'draft-chip'}>
+                      <div>
+                        <strong>{row.sku_name}</strong>
+                        <div className="meta">{row.manager_qty} шт · рек. {row.to_order}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </section>
 
             <section className="card table-card">

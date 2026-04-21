@@ -66,6 +66,10 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
 .search-input { width: 100%; margin: 12px 0 16px; }
 .search-results { display: grid; gap: 12px; }
 .search-item { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.03); }
+.added-card { margin-bottom: 22px; }
+.chips-wrap { display: flex; flex-wrap: wrap; gap: 10px; }
+.draft-chip { padding: 12px 14px; border-radius: 18px; border: 1px solid var(--line); background: rgba(255,255,255,.04); min-width: 220px; }
+.draft-chip.manual { background: linear-gradient(135deg, rgba(112,224,181,.12), rgba(240,195,107,.08)); border-color: rgba(112,224,181,.35); }
 .coverage-box { display: grid; gap: 8px; min-width: 140px; }
 .mini-actions { display: flex; gap: 8px; }
 .ghost-btn { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
