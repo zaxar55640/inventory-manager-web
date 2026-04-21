@@ -249,9 +249,10 @@ export function App() {
               <label><span>Фильтр по группе</span><select value={nonLiquidGroup} onChange={(e)=>setNonLiquidGroup(e.target.value)}><option value="">Все группы</option>{nonLiquidGroups.map((g)=><option key={g} value={g}>{g}</option>)}</select></label>
               <label><span>Поиск по товару</span><input value={nonLiquidSearch} onChange={(e)=>setNonLiquidSearch(e.target.value)} placeholder="Название / артикул" /></label>
             </div>
-            <div className="table-wrap"><table><thead><tr><th>Группа</th><th>Товар</th><th>Остаток</th><th>Продажи 4 мес</th><th>Последняя продажа</th><th>Магазин</th></tr></thead><tbody>
+            <div className="table-wrap desktop-only"><table><thead><tr><th>Группа</th><th>Товар</th><th>Остаток</th><th>Продажи 4 мес</th><th>Последняя продажа</th><th>Магазин</th></tr></thead><tbody>
               {nonLiquidItems.map((row, idx)=><tr key={`${row.norm_name}-${row.store_ref}-${idx}`}><td>{row.subgroup || 'Без группы'}</td><td><div className="sku">{row.sku_name}</div><div className="meta">{row.item_ref || '—'}</div></td><td>{currency.format(row.available_qty || 0)}</td><td>{currency.format(row.sales_qty_4m || 0)}</td><td>{row.last_sale_date ? new Date(row.last_sale_date).toLocaleDateString('ru-RU') : 'не было'}</td><td>{row.store}</td></tr>)}
             </tbody></table></div>
+            <div className="mobile-list mobile-only">{nonLiquidItems.map((row, idx)=><article key={`${row.norm_name}-${row.store_ref}-mobile-${idx}`} className="mobile-card"><div className="mobile-card-top"><div><div className="status-badge">{row.subgroup || 'Без группы'}</div><strong>{row.sku_name}</strong><div className="meta">{row.item_ref || '—'}</div></div></div><div className="mobile-metrics"><div><span className="meta">Остаток</span><strong>{currency.format(row.available_qty || 0)}</strong></div><div><span className="meta">Продажи 4 мес</span><strong>{currency.format(row.sales_qty_4m || 0)}</strong></div><div><span className="meta">Последняя продажа</span><strong>{row.last_sale_date ? new Date(row.last_sale_date).toLocaleDateString('ru-RU') : 'не было'}</strong></div><div><span className="meta">Магазин</span><strong>{row.store}</strong></div></div></article>)}</div>
           </section>
         )}
       </main>
