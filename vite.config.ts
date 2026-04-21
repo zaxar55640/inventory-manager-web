@@ -16,7 +16,8 @@ export default defineConfig(({mode}) => {
       }
     },
     build: {
-      outDir: 'dist'
+      outDir: 'dist',
+      manifest: false
     }
   };
 });
