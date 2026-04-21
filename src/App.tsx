@@ -21,6 +21,7 @@ type OrderBatch = {id: number; supplier_name: string; status: string; created_at
 type DraftItem = {id: number; recommendation_id: number; item_ref: string; sku_name: string; norm_name: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string};
 type DraftDetail = {batch: DraftSummary; items: DraftItem[]};
 type OrderDetail = {batch: {id: number; supplier_name: string; status: string; created_at: string}; items: Array<{id:number; sku_name:string; item_ref:string; recommended_qty:number; manager_qty:number; final_qty:number; reason:string; item_status:string}>};
+type NonLiquidItem = {store: string; store_ref: string; item_ref: string; sku_name: string; norm_name: string; subgroup: string; available_qty: number; sales_qty_4m: number; last_sale_date: string | null};
 
 type CreateMode = 'single' | 'multi';
 const currency = new Intl.NumberFormat('ru-RU');
@@ -33,7 +34,7 @@ export function App() {
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [currentDraft, setCurrentDraft] = useState<DraftDetail | null>(null);
   const [openOrder, setOpenOrder] = useState<OrderDetail | null>(null);
-  const [tab, setTab] = useState<'create' | 'drafts' | 'orders'>('create');
+  const [tab, setTab] = useState<'create' | 'drafts' | 'orders' | 'nonLiquid'>('create');
   const [mode, setMode] = useState<CreateMode | null>(null);
   const [listSearch, setListSearch] = useState('');
   const [search, setSearch] = useState('');
@@ -41,6 +42,10 @@ export function App() {
   const [searchSupplierFilter, setSearchSupplierFilter] = useState('');
   const [supplierCoverageInput, setSupplierCoverageInput] = useState('');
   const [productCoverageInputs, setProductCoverageInputs] = useState<Record<string, string>>({});
+  const [nonLiquidItems, setNonLiquidItems] = useState<NonLiquidItem[]>([]);
+  const [nonLiquidGroups, setNonLiquidGroups] = useState<string[]>([]);
+  const [nonLiquidGroup, setNonLiquidGroup] = useState('');
+  const [nonLiquidSearch, setNonLiquidSearch] = useState('');
   const [loading, setLoading] = useState(false);
 
   async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -56,6 +61,13 @@ export function App() {
   }
   async function loadOrders() { setOrders(await fetchJSON<OrderBatch[]>(apiUrl('/api/orders'))); }
   async function loadDrafts() { setDrafts(await fetchJSON<DraftSummary[]>(apiUrl('/api/drafts'))); }
+  async function loadNonLiquidGroups() { setNonLiquidGroups(await fetchJSON<string[]>(apiUrl('/api/non-liquid/groups'))); }
+  async function loadNonLiquidItems(group = nonLiquidGroup, q = nonLiquidSearch) {
+    const params = new URLSearchParams();
+    if (group) params.set('subgroup', group);
+    if (q.trim()) params.set('q', q.trim());
+    setNonLiquidItems(await fetchJSON<NonLiquidItem[]>(apiUrl(`/api/non-liquid${params.toString() ? `?${params.toString()}` : ''}`)));
+  }
 
   async function openDraft(id: number) {
     const detail = await fetchJSON<DraftDetail>(apiUrl(`/api/drafts/${id}`));
@@ -74,6 +86,8 @@ export function App() {
       await loadSuppliers();
       await loadOrders();
       await loadDrafts();
+      await loadNonLiquidGroups();
+      await loadNonLiquidItems('', '');
       const latest = await fetchJSON<DraftSummary | null>(apiUrl('/api/drafts/latest'));
       if (latest) {
         const resume = window.confirm('Хотите продолжить заполнение последней заявки? Нажмите Cancel, чтобы создать новую.');
@@ -101,6 +115,13 @@ export function App() {
     }, 250);
     return () => clearTimeout(t);
   }, [search, searchSupplierFilter]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      loadNonLiquidItems(nonLiquidGroup, nonLiquidSearch);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [nonLiquidGroup, nonLiquidSearch]);
 
   async function startDraft(nextMode: CreateMode) {
     const created = await fetchJSON<{id:number}>(apiUrl('/api/drafts'), {method:'POST', body: JSON.stringify({draft_mode: nextMode})});
@@ -164,6 +185,7 @@ export function App() {
           <button className={tab==='create'?'tab active':'tab'} onClick={() => { setTab('create'); if (!currentDraft) setMode(null); }}>Новая заявка</button>
           <button className={tab==='drafts'?'tab active':'tab'} onClick={() => setTab('drafts')}>Драфты</button>
           <button className={tab==='orders'?'tab active':'tab'} onClick={() => setTab('orders')}>Список заявок</button>
+          <button className={tab==='nonLiquid'?'tab active':'tab'} onClick={() => setTab('nonLiquid')}>Неликвиды</button>
         </div>
       </aside>
       <main className="main">
@@ -217,6 +239,19 @@ export function App() {
         {tab === 'orders' && (
           <section className="card orders-card"><div className="section-head"><div><span className="eyebrow">Заявки</span><h2>Созданные заявки</h2></div></div><div className="orders-grid">{orders.map((order)=><article key={order.id} className="order-tile"><div><div className="status-badge">{order.status}</div><h3>{order.supplier_name}</h3><p>{order.items_count} позиций · {currency.format(order.total_qty)}</p><span className="meta">{new Date(order.created_at).toLocaleString('ru-RU')}</span></div><div className="inline-actions"><button className="primary ghost" onClick={()=>openOrderDetail(order.id)}>Открыть</button><button className="primary ghost" disabled={order.status==='completed'} onClick={()=>fetchJSON(apiUrl(`/api/orders/${order.id}/complete`),{method:'POST'}).then(loadOrders)}>{order.status==='completed'?'Выполнена':'Выполнить'}</button></div></article>)}</div>
           {openOrder && <div className="card search-card"><div className="section-head"><div><span className="eyebrow">Состав заявки</span><h2>#{openOrder.batch.id} · {openOrder.batch.supplier_name}</h2></div></div><div className="search-results">{openOrder.items.map((item)=><div key={item.id} className="search-item"><div><strong>{item.sku_name}</strong><div className="meta">{item.final_qty} шт · причина: {item.reason || '—'}</div></div></div>)}</div></div>}
+          </section>
+        )}
+
+        {tab === 'nonLiquid' && (
+          <section className="card orders-card">
+            <div className="section-head"><div><span className="eyebrow">Неликвиды</span><h2>Нет продаж за последние 4 месяца</h2></div></div>
+            <div className="inline-grid">
+              <label><span>Фильтр по группе</span><select value={nonLiquidGroup} onChange={(e)=>setNonLiquidGroup(e.target.value)}><option value="">Все группы</option>{nonLiquidGroups.map((g)=><option key={g} value={g}>{g}</option>)}</select></label>
+              <label><span>Поиск по товару</span><input value={nonLiquidSearch} onChange={(e)=>setNonLiquidSearch(e.target.value)} placeholder="Название / артикул" /></label>
+            </div>
+            <div className="table-wrap"><table><thead><tr><th>Группа</th><th>Товар</th><th>Остаток</th><th>Продажи 4 мес</th><th>Последняя продажа</th><th>Магазин</th></tr></thead><tbody>
+              {nonLiquidItems.map((row, idx)=><tr key={`${row.norm_name}-${row.store_ref}-${idx}`}><td>{row.subgroup || 'Без группы'}</td><td><div className="sku">{row.sku_name}</div><div className="meta">{row.item_ref || '—'}</div></td><td>{currency.format(row.available_qty || 0)}</td><td>{currency.format(row.sales_qty_4m || 0)}</td><td>{row.last_sale_date ? new Date(row.last_sale_date).toLocaleDateString('ru-RU') : 'не было'}</td><td>{row.store}</td></tr>)}
+            </tbody></table></div>
           </section>
         )}
       </main>

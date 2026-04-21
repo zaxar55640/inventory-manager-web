@@ -73,6 +73,79 @@ app.get('/api/search', (req, res) => {
   res.json(rows);
 });
 
+app.get('/api/non-liquid/groups', (_req, res) => {
+  try {
+    db.exec(`ALTER TABLE stock_snapshots ADD COLUMN subgroup TEXT`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE stock_snapshots ADD COLUMN subgroup_ref TEXT`);
+  } catch {}
+  const rows = db.prepare(`
+    SELECT DISTINCT COALESCE(NULLIF(subgroup, ''), NULLIF(subgroup_ref, ''), 'Без группы') AS subgroup
+    FROM stock_snapshots
+    WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM stock_snapshots)
+      AND COALESCE(available_qty, 0) > 0
+    ORDER BY subgroup ASC
+  `).all();
+  res.json(rows.map((r) => r.subgroup));
+});
+
+app.get('/api/non-liquid', (req, res) => {
+  try {
+    db.exec(`ALTER TABLE stock_snapshots ADD COLUMN subgroup TEXT`);
+  } catch {}
+  try {
+    db.exec(`ALTER TABLE stock_snapshots ADD COLUMN subgroup_ref TEXT`);
+  } catch {}
+  const subgroup = String(req.query.subgroup || '').trim();
+  const q = String(req.query.q || '').trim();
+  const qLike = `%${q}%`;
+  const rows = db.prepare(`
+    WITH latest_stock AS (
+      SELECT
+        s.store,
+        s.store_ref,
+        s.item_ref,
+        s.sku_name,
+        s.norm_name,
+        COALESCE(NULLIF(s.subgroup, ''), NULLIF(s.subgroup_ref, ''), 'Без группы') AS subgroup,
+        s.available_qty
+      FROM stock_snapshots s
+      WHERE s.snapshot_date = (SELECT MAX(snapshot_date) FROM stock_snapshots)
+        AND COALESCE(s.available_qty, 0) > 0
+    ),
+    sales_4m AS (
+      SELECT norm_name, store_ref, SUM(COALESCE(sales_qty, 0)) AS sales_qty_4m
+      FROM daily_sales
+      WHERE date(sale_date) >= date('now', '-4 months')
+      GROUP BY norm_name, store_ref
+    ),
+    sales_all AS (
+      SELECT norm_name, store_ref, MAX(date(sale_date)) AS last_sale_date
+      FROM daily_sales
+      GROUP BY norm_name, store_ref
+    )
+    SELECT
+      ls.store,
+      ls.store_ref,
+      ls.item_ref,
+      ls.sku_name,
+      ls.norm_name,
+      ls.subgroup,
+      ls.available_qty,
+      COALESCE(s4.sales_qty_4m, 0) AS sales_qty_4m,
+      sa.last_sale_date
+    FROM latest_stock ls
+    LEFT JOIN sales_4m s4 ON s4.norm_name = ls.norm_name AND s4.store_ref = ls.store_ref
+    LEFT JOIN sales_all sa ON sa.norm_name = ls.norm_name AND sa.store_ref = ls.store_ref
+    WHERE COALESCE(s4.sales_qty_4m, 0) <= 0
+      AND (? = '' OR ls.subgroup = ?)
+      AND (? = '' OR ls.sku_name LIKE ? OR ls.item_ref LIKE ? OR ls.norm_name LIKE ?)
+    ORDER BY ls.subgroup ASC, ls.available_qty DESC, ls.sku_name ASC
+  `).all(subgroup, subgroup, q, qLike, qLike, qLike);
+  res.json(rows);
+});
+
 app.post('/api/coverage/supplier', (req, res) => {
   const {supplier_name, coverage_days} = req.body;
   if (!supplier_name) return res.status(400).send('supplier_name required');
@@ -89,7 +162,7 @@ app.post('/api/coverage/product', (req, res) => {
 
 app.get('/api/drafts', (_req, res) => {
   const rows = db.prepare(`
-    SELECT id, supplier_name, status, created_at, draft_mode,
+    SELECT b.id, b.supplier_name, b.status, b.created_at, b.draft_mode,
            COUNT(i.id) AS items_count,
            ROUND(SUM(COALESCE(i.final_qty, i.manager_qty, i.recommended_qty)), 2) AS total_qty
     FROM purchase_order_batches b
