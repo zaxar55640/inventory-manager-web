@@ -263,9 +263,9 @@ export function App() {
               <label><span>Поиск по товару</span><input value={nonLiquidSearch} onChange={(e)=>setNonLiquidSearch(e.target.value)} placeholder="Название / артикул" /></label>
             </div>
             {nonLiquidLoading && <div className="loading-block"><div className="spinner" /><span>Загружаю неликвиды…</span></div>}
-            <div className="table-wrap table-scroll-hint"><table><thead><tr><th>Группа</th><th>Товар</th><th>Остаток</th><th>Продажи 4 мес</th><th>Последняя продажа</th><th>Дней назад</th><th>Магазин</th></tr></thead><tbody>
+            <div className="table-scroll-hint"><div className="table-pan-x"><table><thead><tr><th>Группа</th><th>Товар</th><th>Остаток</th><th>Продажи 4 мес</th><th>Последняя продажа</th><th>Дней назад</th><th>Магазин</th></tr></thead><tbody>
               {nonLiquidItems.map((row, idx)=><tr key={`${row.norm_name}-${row.store_ref}-${idx}`}><td>{row.subgroup || 'Без группы'}</td><td><div className="sku">{row.sku_name}</div><div className="meta">{row.item_ref || '—'}</div></td><td>{currency.format(row.available_qty || 0)}</td><td>{currency.format(row.sales_qty_4m || 0)}</td><td>{row.last_sale_date ? new Date(row.last_sale_date).toLocaleDateString('ru-RU') : 'не было'}</td><td>{row.days_since_last_sale != null ? `${row.days_since_last_sale} дн.` : '—'}</td><td>{row.store}</td></tr>)}
-            </tbody></table></div>
+            </tbody></table></div></div>
           </section>
         )}
       </main>

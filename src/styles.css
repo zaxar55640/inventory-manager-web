@@ -45,7 +45,8 @@ textarea { min-height: 78px; resize: vertical; min-width: 220px; }
 .inline-actions, .meta-row { display: flex; gap: 8px; align-items: center; }
 .compact input { max-width: 90px; }
 .table-wrap { overflow: auto; -webkit-overflow-scrolling: touch; }
-.table-scroll-hint { position: relative; }
+.table-scroll-hint { position: relative; min-width: 0; }
+.table-pan-x { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; touch-action: pan-x; overscroll-behavior-x: contain; width: 100%; max-width: 100%; padding-bottom: 6px; }
 .table-scroll-hint::after { content: '← свайп вбок →'; position: sticky; left: 12px; display: inline-block; margin: 8px 0 0; padding: 6px 10px; font-size: 11px; color: var(--muted); background: rgba(13,17,23,.9); border: 1px solid var(--line); border-radius: 999px; }
 table { width: 100%; border-collapse: collapse; min-width: 1280px; }
 th, td { text-align: left; padding: 16px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -90,6 +91,7 @@ button, .tab, .step-card { touch-action: manipulation; }
   .order-tile .inline-actions,
   .order-tile .inline-actions > * { width: 100%; max-width: 100%; }
   .table-wrap { overflow-x: auto; overflow-y: hidden; }
+  .table-pan-x { overflow-x: auto; overflow-y: hidden; touch-action: pan-x; }
   table { min-width: 1180px; }
   .table-scroll-hint::after { margin-top: 10px; }
   .search-item { padding: 12px; }
