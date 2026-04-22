@@ -402,6 +402,82 @@ app.post('/api/orders/:id/complete', (req, res) => {
   res.json({ok: true});
 });
 
+// ── products catalog ───────────────────────────────────────────────────────────
+
+app.get('/api/products-catalog', (req, res) => {
+  const q      = String(req.query.q      || '').trim();
+  const subgrp = String(req.query.subgroup  || '').trim();
+  const supp   = String(req.query.supplier  || '').trim();
+  const sortBy = String(req.query.sort_by   || 'sku_name');
+  const sortDir= req.query.sort_dir === 'desc' ? 'DESC' : 'ASC';
+  const limit  = Math.min(200, Math.max(1, Number(req.query.limit  || 100)));
+  const offset = Math.max(0, Number(req.query.offset || 0));
+
+  const allowed = new Set(['sku_name','subgroup','supplier_name','abc_class','xyz_class',
+    'available_qty','to_order','status','last_sale_date','days_since_last_sale',
+    'is_seasonal','nlq_score','peak_months']);
+  const col = allowed.has(sortBy) ? sortBy : 'r.sku_name';
+  const colPfx = ['last_sale_date','days_since_last_sale','is_seasonal','nlq_score','subgroup'].includes(sortBy)
+    ? `nl.${sortBy}`
+    : ['available_qty','supplier_name','to_order','status','abc_class','xyz_class','pre_season_flag','peak_months','sku_name'].includes(sortBy)
+    ? `r.${sortBy}`
+    : `r.sku_name`;
+
+  const whereClauses = [`r.calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)`];
+  const params = [];
+
+  if (q) {
+    whereClauses.push(`(r.sku_name LIKE ? OR p.barcode = ? OR p.barcode LIKE ?)`);
+    params.push(`%${q}%`, q, `%${q}%`);
+  }
+  if (subgrp) { whereClauses.push(`ss.subgroup = ?`); params.push(subgrp); }
+  if (supp)   { whereClauses.push(`r.supplier_name = ?`); params.push(supp); }
+
+  const where = 'WHERE ' + whereClauses.join(' AND ');
+
+  const baseSql = `
+    FROM purchase_recommendations r
+    LEFT JOIN products p ON p.sku_name = r.sku_name
+    LEFT JOIN non_liquid_snapshot nl
+      ON nl.sku_name = r.sku_name
+     AND nl.snapshot_date = (SELECT MAX(snapshot_date) FROM non_liquid_snapshot)
+    ${where}
+  `;
+
+  try {
+    const total = db.prepare(`SELECT COUNT(*) AS total ${baseSql}`).get(...params).total;
+    const rows  = db.prepare(`
+      SELECT r.sku_name, r.item_ref, p.barcode,
+             nl.subgroup,
+             r.available_qty,
+             r.supplier_name, r.to_order, r.status,
+             r.pre_season_flag, r.peak_months,
+             r.abc_class, r.xyz_class, r.explain_text,
+             nl.last_sale_date, nl.days_since_last_sale,
+             nl.is_seasonal, nl.season_note, nl.nlq_score
+      ${baseSql}
+      ORDER BY ${colPfx} ${sortDir} NULLS LAST
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset);
+    res.json({ items: rows, total, limit, offset, has_more: offset + rows.length < total });
+  } catch (err) {
+    console.error('/api/products-catalog error', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/products-catalog/groups', (_req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT DISTINCT COALESCE(NULLIF(subgroup,''), NULLIF(subgroup_ref,''), 'Без группы') AS subgroup
+      FROM stock_snapshots
+      WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM stock_snapshots)
+      ORDER BY subgroup ASC
+    `).all();
+    res.json(rows.map(r => r.subgroup));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 const distDir = path.resolve(__dirname, 'dist');
 app.use('/inventory-manager-web/assets', express.static(path.join(distDir, 'assets'), {
   setHeaders: (res) => {

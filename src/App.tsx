@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 import {apiUrl} from './config';
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -49,8 +49,19 @@ type NonLiquidResponse = {items: NonLiquidItem[]; total: number; limit: number; 
 type Dashboard = {total_to_order: number; urgent_count: number; pre_season_count: number; overstock_count: number; new_items_count: number};
 type Decision = {decision_date: string; manager_name: string; sku_name: string; system_qty: number; manager_qty: number; delta_qty: number; reason: string; supplier_name: string};
 
+type CatalogItem = {
+  sku_name: string; item_ref: string; barcode: string | null;
+  subgroup: string | null; available_qty: number;
+  supplier_name: string | null; to_order: number | null; status: string | null;
+  pre_season_flag: number; peak_months: string | null;
+  abc_class: string | null; xyz_class: string | null; explain_text: string | null;
+  last_sale_date: string | null; days_since_last_sale: number | null;
+  is_seasonal: number | null; season_note: string | null; nlq_score: number | null;
+};
+type CatalogResponse = {items: CatalogItem[]; total: number; limit: number; offset: number; has_more: boolean};
+
 type CreateMode = 'single' | 'multi';
-type TabKey = 'create' | 'drafts' | 'orders' | 'nonLiquid' | 'decisions';
+type TabKey = 'create' | 'drafts' | 'orders' | 'nonLiquid' | 'decisions' | 'catalog';
 
 const currency = new Intl.NumberFormat('ru-RU');
 
@@ -62,6 +73,7 @@ function getTabFromLocation(): TabKey {
   if (hash === '/drafts' || hash === 'drafts') return 'drafts';
   if (hash === '/orders' || hash === 'orders') return 'orders';
   if (hash === '/decisions' || hash === 'decisions') return 'decisions';
+  if (hash === '/catalog' || hash === 'catalog') return 'catalog';
   return 'create';
 }
 
@@ -71,6 +83,7 @@ function navigateToTab(tab: TabKey) {
     drafts: '#/drafts',
     orders: '#/orders',
     decisions: '#/decisions',
+    catalog: '#/catalog',
     create: '#/',
   };
   window.location.hash = map[tab];
@@ -265,6 +278,9 @@ export function App() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [decisions, setDecisions] = useState<Decision[]>([]);
 
+  // scroll ref for draft items section
+  const draftItemsRef = useRef<HTMLElement>(null);
+
   // explain modal
   const [explainRow, setExplainRow] = useState<Recommendation | null>(null);
 
@@ -296,6 +312,20 @@ export function App() {
 
   const [loading, setLoading] = useState(false);
 
+  // catalog state
+  const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
+  const [catalogTotal, setCatalogTotal] = useState(0);
+  const [catalogOffset, setCatalogOffset] = useState(0);
+  const [catalogHasMore, setCatalogHasMore] = useState(false);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogGroup, setCatalogGroup] = useState('');
+  const [catalogSupplier, setCatalogSupplier] = useState('');
+  const [catalogSortBy, setCatalogSortBy] = useState('to_order');
+  const [catalogSortDir, setCatalogSortDir] = useState<'asc'|'desc'>('desc');
+  const [catalogGroups, setCatalogGroups] = useState<string[]>([]);
+  const CATALOG_LIMIT = 100;
+
   // ── api helpers ─────────────────────────────────────────────────────────────
 
   async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -313,6 +343,32 @@ export function App() {
   async function loadDrafts() { setDrafts(await fetchJSON<DraftSummary[]>(apiUrl('/api/drafts'))); }
   async function loadDashboard() { setDashboard(await fetchJSON<Dashboard>(apiUrl('/api/dashboard'))); }
   async function loadDecisions() { setDecisions(await fetchJSON<Decision[]>(apiUrl('/api/decisions'))); }
+
+  async function loadCatalogGroups() {
+    try { setCatalogGroups(await fetchJSON<string[]>(apiUrl('/api/products-catalog/groups'))); } catch {}
+  }
+
+  async function loadCatalog(group = catalogGroup, q = catalogSearch, supplier = catalogSupplier, sortBy = catalogSortBy, sortDir = catalogSortDir, offset = catalogOffset) {
+    const params = new URLSearchParams();
+    if (group) params.set('subgroup', group);
+    if (q.trim()) params.set('q', q.trim());
+    if (supplier) params.set('supplier', supplier);
+    params.set('sort_by', sortBy);
+    params.set('sort_dir', sortDir);
+    params.set('limit', String(CATALOG_LIMIT));
+    params.set('offset', String(offset));
+    setCatalogLoading(true);
+    try {
+      const data = await fetchJSON<CatalogResponse>(apiUrl(`/api/products-catalog?${params}`));
+      setCatalogItems(Array.isArray(data?.items) ? data.items : []);
+      setCatalogTotal(Number(data?.total || 0));
+      setCatalogOffset(Number(data?.offset || 0));
+      setCatalogHasMore(Boolean(data?.has_more));
+    } catch (err) {
+      console.error('loadCatalog failed', err);
+      setCatalogItems([]); setCatalogTotal(0); setCatalogHasMore(false);
+    } finally { setCatalogLoading(false); }
+  }
 
   async function loadNonLiquidGroups() {
     setNonLiquidLoading(true);
@@ -362,7 +418,7 @@ export function App() {
     window.addEventListener('hashchange', onHash);
     (async () => {
       try {
-        await Promise.all([loadSuppliers(), loadOrders(), loadDrafts(), loadDashboard(), loadNonLiquidGroups()]);
+        await Promise.all([loadSuppliers(), loadOrders(), loadDrafts(), loadDashboard(), loadNonLiquidGroups(), loadCatalogGroups()]);
         await loadNonLiquidItems('', '', 0);
         if (getTabFromLocation() === 'create') {
           const latest = await fetchJSON<DraftSummary | null>(apiUrl('/api/drafts/latest'));
@@ -405,7 +461,22 @@ export function App() {
 
   useEffect(() => {
     if (tab === 'decisions') loadDecisions();
+    if (tab === 'catalog') loadCatalog(catalogGroup, catalogSearch, catalogSupplier, catalogSortBy, catalogSortDir, 0);
   }, [tab]);
+
+  useEffect(() => {
+    if (tab !== 'catalog') return;
+    const t = setTimeout(() => {
+      setCatalogOffset(0);
+      loadCatalog(catalogGroup, catalogSearch, catalogSupplier, catalogSortBy, catalogSortDir, 0);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [catalogSearch, catalogGroup, catalogSupplier, catalogSortBy, catalogSortDir]);
+
+  useEffect(() => {
+    if (tab !== 'catalog') return;
+    loadCatalog(catalogGroup, catalogSearch, catalogSupplier, catalogSortBy, catalogSortDir, catalogOffset);
+  }, [catalogOffset]);
 
   // ── draft actions ─────────────────────────────────────────────────────────
 
@@ -425,6 +496,7 @@ export function App() {
       });
       setAddedIds(prev => new Set([...prev, row.id]));
       await openDraft(currentDraft.batch.id);
+      setTimeout(() => draftItemsRef.current?.scrollIntoView({behavior: 'smooth', block: 'start'}), 100);
     } catch (err) {
       console.error('addRecommendationToDraft failed', err);
     } finally {
@@ -527,6 +599,7 @@ export function App() {
           <button className={tab === 'create' ? 'tab active' : 'tab'} onClick={() => { setTab('create'); navigateToTab('create'); if (!currentDraft) setMode(null); }}>Новая заявка</button>
           <button className={tab === 'drafts' ? 'tab active' : 'tab'} onClick={() => { setTab('drafts'); navigateToTab('drafts'); }}>Драфты</button>
           <button className={tab === 'orders' ? 'tab active' : 'tab'} onClick={() => { setTab('orders'); navigateToTab('orders'); }}>Заявки</button>
+          <button className={tab === 'catalog' ? 'tab active' : 'tab'} onClick={() => { setTab('catalog'); navigateToTab('catalog'); }}>Товары</button>
           <button className={tab === 'nonLiquid' ? 'tab active' : 'tab'} onClick={() => { setTab('nonLiquid'); navigateToTab('nonLiquid'); }}>Неликвиды</button>
           <button className={tab === 'decisions' ? 'tab active' : 'tab'} onClick={() => { setTab('decisions'); navigateToTab('decisions'); }}>Решения менеджеров</button>
         </div>
@@ -698,7 +771,7 @@ export function App() {
             )}
 
             {/* draft items */}
-            <section className="card orders-card">
+            <section ref={draftItemsRef} className="card orders-card">
               <div className="section-head">
                 <div><span className="eyebrow">Текущая заявка</span><h2>Добавленные товары</h2></div>
                 <label style={{display: 'flex', gap: 8, alignItems: 'center'}}>
@@ -886,6 +959,134 @@ export function App() {
               <button className="ghost-btn" disabled={nonLiquidOffset === 0 || nonLiquidLoading} onClick={() => setNonLiquidOffset(Math.max(0, nonLiquidOffset - nonLiquidLimit))}>← Назад</button>
               <span className="meta">Стр. {Math.floor(nonLiquidOffset / nonLiquidLimit) + 1} из {Math.max(1, Math.ceil(nonLiquidTotal / nonLiquidLimit))} · по {nonLiquidLimit} шт.</span>
               <button className="ghost-btn" disabled={!nonLiquidHasMore || nonLiquidLoading} onClick={() => setNonLiquidOffset(nonLiquidOffset + nonLiquidLimit)}>Вперёд →</button>
+            </div>
+          </section>
+        )}
+
+        {/* ── CATALOG TAB ────────────────────────────────────────────────── */}
+        {tab === 'catalog' && (
+          <section className="card orders-card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">Каталог товаров</span>
+                <h2>Все товары</h2>
+                <div className="meta">Показано {catalogItems.length} из {currency.format(catalogTotal)}</div>
+              </div>
+            </div>
+            <div className="inline-grid" style={{gap: 8, flexWrap: 'wrap'}}>
+              <label>
+                <span>Поиск (название / штрихкод)</span>
+                <input value={catalogSearch} onChange={e => setCatalogSearch(e.target.value)} placeholder="Название или штрихкод" />
+              </label>
+              <label>
+                <span>Группа</span>
+                <select value={catalogGroup} onChange={e => { setCatalogOffset(0); setCatalogGroup(e.target.value); }}>
+                  <option value="">Все группы</option>
+                  {catalogGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Поставщик</span>
+                <select value={catalogSupplier} onChange={e => { setCatalogOffset(0); setCatalogSupplier(e.target.value); }}>
+                  <option value="">Все поставщики</option>
+                  {suppliers.map(s => <option key={s.supplier_name} value={s.supplier_name}>{s.supplier_name}</option>)}
+                </select>
+              </label>
+            </div>
+            <div style={{display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8}}>
+              {([
+                ['to_order', 'К заказу'],
+                ['sku_name', 'Название'],
+                ['available_qty', 'Остаток'],
+                ['abc_class', 'ABC'],
+                ['xyz_class', 'XYZ'],
+                ['last_sale_date', 'Посл. продажа'],
+                ['days_since_last_sale', 'Дней без продаж'],
+                ['nlq_score', 'Рейтинг неликв.'],
+                ['status', 'Статус'],
+              ] as [string, string][]).map(([key, label]) => (
+                <button key={key}
+                  onClick={() => {
+                    if (catalogSortBy === key) { setCatalogSortDir(d => d === 'asc' ? 'desc' : 'asc'); }
+                    else { setCatalogSortBy(key); setCatalogSortDir('desc'); }
+                    setCatalogOffset(0);
+                  }}
+                  style={{
+                    padding: '3px 10px', borderRadius: 6, border: '1px solid #334155',
+                    background: catalogSortBy === key ? '#2563eb' : '#0f172a',
+                    color: catalogSortBy === key ? '#fff' : '#94a3b8',
+                    cursor: 'pointer', fontSize: '0.78em', fontWeight: catalogSortBy === key ? 700 : 400,
+                  }}>
+                  {label} {catalogSortBy === key ? (catalogSortDir === 'asc' ? '↑' : '↓') : ''}
+                </button>
+              ))}
+            </div>
+            {catalogLoading && <div className="loading-block"><div className="spinner" /><span>Загружаю…</span></div>}
+            <div className="table-scroll-hint"><div className="table-pan-x">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Товар</th>
+                    <th>Штрихкод</th>
+                    <th>Группа</th>
+                    <th>Поставщик</th>
+                    <th title="ABC — по объёму, XYZ — по стабильности спроса">Кл.</th>
+                    <th style={{textAlign: 'right'}}>Остаток</th>
+                    <th style={{textAlign: 'right'}}>К заказу</th>
+                    <th>Статус</th>
+                    <th>Посл. продажа</th>
+                    <th>Дней без продаж</th>
+                    <th>Сезонность</th>
+                    <th>Рейтинг НЛ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {catalogItems.map((row, idx) => {
+                    const score = row.nlq_score ?? 0;
+                    const scoreBg = score >= 70 ? '#ef4444' : score >= 40 ? '#f59e0b' : '#22c55e';
+                    return (
+                      <tr key={`${row.sku_name}-${idx}`} style={{
+                        background: row.status === 'urgent_order' ? 'rgba(239,68,68,.07)'
+                          : row.status === 'pre_season_order' ? 'rgba(245,158,11,.07)'
+                          : undefined,
+                      }}>
+                        <td>
+                          <div className="sku">{row.sku_name}</div>
+                          {row.item_ref && row.item_ref !== row.sku_name && <div className="meta">{row.item_ref}</div>}
+                        </td>
+                        <td style={{fontFamily: 'monospace', fontSize: '0.8em', color: '#64748b'}}>{row.barcode || '—'}</td>
+                        <td style={{fontSize: '0.85em'}}>{row.subgroup || '—'}</td>
+                        <td style={{fontSize: '0.82em'}}>{row.supplier_name || '—'}</td>
+                        <td><ClassBadge abc={row.abc_class || ''} xyz={row.xyz_class || ''} /></td>
+                        <td style={{textAlign: 'right'}}>{currency.format(row.available_qty || 0)}</td>
+                        <td style={{textAlign: 'right', fontWeight: 700, color: row.to_order ? '#f1f5f9' : '#475569'}}>
+                          {row.to_order ? currency.format(row.to_order) : '—'}
+                        </td>
+                        <td>{row.status ? <StatusDot status={row.status} /> : '—'}</td>
+                        <td style={{fontSize: '0.85em'}}>{row.last_sale_date ? new Date(row.last_sale_date).toLocaleDateString('ru-RU') : '—'}</td>
+                        <td style={{textAlign: 'right', color: (row.days_since_last_sale ?? 0) > 120 ? '#ef4444' : '#f1f5f9', fontSize: '0.85em'}}>
+                          {row.days_since_last_sale != null ? `${row.days_since_last_sale} дн.` : '—'}
+                        </td>
+                        <td>
+                          {row.is_seasonal
+                            ? <span style={{color: '#f59e0b', fontSize: '0.8em'}} title={row.season_note || ''}>🌿 {row.season_note || 'сезон'}</span>
+                            : <span style={{color: '#475569', fontSize: '0.8em'}}>—</span>}
+                        </td>
+                        <td>
+                          {row.nlq_score != null
+                            ? <span style={{display: 'inline-block', minWidth: 32, textAlign: 'center', padding: '1px 5px', borderRadius: 4, background: scoreBg, color: '#fff', fontWeight: 700, fontSize: '0.8em'}}>{score}</span>
+                            : <span style={{color: '#475569'}}>—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div></div>
+            <div className="inline-actions" style={{marginTop: 12, justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12}}>
+              <button className="ghost-btn" disabled={catalogOffset === 0 || catalogLoading} onClick={() => setCatalogOffset(Math.max(0, catalogOffset - CATALOG_LIMIT))}>← Назад</button>
+              <span className="meta">Стр. {Math.floor(catalogOffset / CATALOG_LIMIT) + 1} из {Math.max(1, Math.ceil(catalogTotal / CATALOG_LIMIT))} · по {CATALOG_LIMIT} шт.</span>
+              <button className="ghost-btn" disabled={!catalogHasMore || catalogLoading} onClick={() => setCatalogOffset(catalogOffset + CATALOG_LIMIT)}>Вперёд →</button>
             </div>
           </section>
         )}
