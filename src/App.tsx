@@ -471,8 +471,8 @@ export function App() {
 
       <aside className="rail">
         <div className="brand">
-          <span className="eyebrow">Zakup Manager</span>
           <h1>Закупки</h1>
+          <span style={{fontSize: '0.7em', color: '#22c55e', fontWeight: 700, letterSpacing: '0.05em'}}>v2 · {new Date().toLocaleDateString('ru-RU')}</span>
           {dashboard && (
             <div style={{display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8}}>
               {dashboard.urgent_count > 0 && <span style={{color: '#ef4444', fontSize: '0.8em'}}>🔴 Срочно: {dashboard.urgent_count} поз.</span>}
