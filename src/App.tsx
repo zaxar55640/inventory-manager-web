@@ -166,47 +166,83 @@ function ExplainModal({row, onClose}: {row: Recommendation; onClose: () => void}
   );
 }
 
-// ── comment modal (mandatory when deviating from recommended qty) ─────────────
+// ── edit qty modal (pencil button → opens qty + reason together) ──────────────
 
-function CommentModal({sku, recommended, newQty, onConfirm, onCancel}: {
-  sku: string; recommended: number; newQty: number;
-  onConfirm: (comment: string) => void; onCancel: () => void;
+function EditQtyModal({item, onConfirm, onCancel}: {
+  item: DraftItem;
+  onConfirm: (qty: number, comment: string) => void;
+  onCancel: () => void;
 }) {
-  const [comment, setComment] = useState('');
+  const [qty, setQty] = useState(String(item.manager_qty));
+  const [comment, setComment] = useState(item.reason || '');
   const hints = ['Поставщик везёт дольше обычного', 'Избыток на складе', 'Сезон заканчивается', 'Договорились с поставщиком об акции', 'Своё видение по спросу'];
-  const valid = comment.trim().length >= 3;
+  const newQty = Number(qty);
+  const qtyChanged = newQty !== item.recommended_qty;
+  const reasonRequired = qtyChanged;
+  const valid = !isNaN(newQty) && newQty >= 0 && (!reasonRequired || comment.trim().length >= 3);
+
   return (
-    <div style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
-      <div style={{background: '#1e293b', borderRadius: 12, padding: '28px 32px', maxWidth: 440, width: '90%', boxShadow: '0 8px 40px rgba(0,0,0,.5)'}}>
-        <div style={{fontSize: '0.75em', color: '#94a3b8', marginBottom: 6}}>Вы меняете количество</div>
-        <div style={{fontWeight: 700, fontSize: '1em', color: '#f1f5f9', marginBottom: 4}}>{sku}</div>
-        <div style={{color: '#94a3b8', fontSize: '0.9em', marginBottom: 16}}>
-          Система: <strong style={{color: '#f1f5f9'}}>{recommended} шт</strong>
-          {' → '}
-          Вы: <strong style={{color: newQty < recommended ? '#ef4444' : '#22c55e'}}>{newQty} шт</strong>
+    <div style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center'}} onClick={onCancel}>
+      <div style={{background: '#1e293b', borderRadius: 12, padding: '28px 32px', maxWidth: 440, width: '90%', boxShadow: '0 8px 40px rgba(0,0,0,.5)'}} onClick={e => e.stopPropagation()}>
+        <div style={{fontSize: '0.75em', color: '#94a3b8', marginBottom: 4}}>Изменить количество</div>
+        <div style={{fontWeight: 700, fontSize: '1em', color: '#f1f5f9', marginBottom: 16}}>{item.sku_name}</div>
+        <div style={{display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16}}>
+          <label style={{display: 'flex', flexDirection: 'column', gap: 4}}>
+            <span style={{fontSize: '0.8em', color: '#94a3b8'}}>Система рекомендует</span>
+            <span style={{fontSize: '1.2em', fontWeight: 700, color: '#64748b'}}>{item.recommended_qty} шт</span>
+          </label>
+          <span style={{color: '#475569', fontSize: '1.4em'}}>→</span>
+          <label style={{display: 'flex', flexDirection: 'column', gap: 4}}>
+            <span style={{fontSize: '0.8em', color: '#94a3b8'}}>Ваше количество</span>
+            <input
+              autoFocus
+              type="number"
+              min={0}
+              value={qty}
+              onChange={e => setQty(e.target.value)}
+              style={{width: 90, padding: '8px 12px', borderRadius: 8, border: `1px solid ${qtyChanged ? (newQty < item.recommended_qty ? '#ef4444' : '#22c55e') : '#334155'}`, background: '#0f172a', color: '#f1f5f9', fontSize: '1.1em', fontWeight: 700}}
+            />
+          </label>
         </div>
-        <label style={{display: 'block', fontSize: '0.85em', color: '#94a3b8', marginBottom: 6}}>Укажите причину <span style={{color: '#ef4444'}}>*</span></label>
-        <textarea
-          autoFocus
-          value={comment}
-          onChange={e => setComment(e.target.value)}
-          placeholder="Напишите причину изменения…"
-          rows={3}
-          style={{width: '100%', borderRadius: 8, border: '1px solid #334155', background: '#0f172a', color: '#f1f5f9', padding: '10px 12px', fontSize: '0.95em', resize: 'vertical', boxSizing: 'border-box'}}
-        />
-        <div style={{display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, marginBottom: 4}}>
-          {hints.map(h => (
-            <button key={h} onClick={() => setComment(h)}
-              style={{padding: '4px 10px', borderRadius: 6, border: '1px solid #334155', background: '#0f172a', color: '#94a3b8', cursor: 'pointer', fontSize: '0.78em'}}>
-              {h}
-            </button>
-          ))}
-        </div>
+        {qtyChanged && (
+          <>
+            <label style={{display: 'block', fontSize: '0.85em', color: '#94a3b8', marginBottom: 6}}>
+              Причина изменения <span style={{color: '#ef4444'}}>*</span>
+            </label>
+            <textarea
+              value={comment}
+              onChange={e => setComment(e.target.value)}
+              placeholder="Почему меняете количество?"
+              rows={2}
+              style={{width: '100%', borderRadius: 8, border: '1px solid #334155', background: '#0f172a', color: '#f1f5f9', padding: '8px 12px', fontSize: '0.9em', resize: 'none', boxSizing: 'border-box'}}
+            />
+            <div style={{display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8}}>
+              {hints.map(h => (
+                <button key={h} onClick={() => setComment(h)}
+                  style={{padding: '3px 8px', borderRadius: 5, border: '1px solid #334155', background: '#0f172a', color: '#94a3b8', cursor: 'pointer', fontSize: '0.75em'}}>
+                  {h}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        {!qtyChanged && (
+          <div style={{marginBottom: 8}}>
+            <label style={{display: 'block', fontSize: '0.85em', color: '#94a3b8', marginBottom: 6}}>Комментарий (необязательно)</label>
+            <textarea
+              value={comment}
+              onChange={e => setComment(e.target.value)}
+              placeholder="Добавьте комментарий если нужно…"
+              rows={2}
+              style={{width: '100%', borderRadius: 8, border: '1px solid #334155', background: '#0f172a', color: '#f1f5f9', padding: '8px 12px', fontSize: '0.9em', resize: 'none', boxSizing: 'border-box'}}
+            />
+          </div>
+        )}
         <div style={{display: 'flex', gap: 10, marginTop: 16}}>
           <button onClick={onCancel} style={{flex: 1, padding: '10px 0', borderRadius: 8, background: '#334155', color: '#f1f5f9', border: 'none', cursor: 'pointer'}}>Отмена</button>
-          <button onClick={() => valid && onConfirm(comment.trim())} disabled={!valid}
-            style={{flex: 2, padding: '10px 0', borderRadius: 8, background: valid ? '#2563eb' : '#334155', color: '#f1f5f9', border: 'none', cursor: valid ? 'pointer' : 'not-allowed', fontWeight: 700}}>
-            Подтвердить
+          <button onClick={() => valid && onConfirm(newQty, comment.trim())} disabled={!valid}
+            style={{flex: 2, padding: '10px 0', borderRadius: 8, background: valid ? '#2563eb' : '#1e293b', color: valid ? '#fff' : '#475569', border: 'none', cursor: valid ? 'pointer' : 'not-allowed', fontWeight: 700}}>
+            Сохранить
           </button>
         </div>
       </div>
@@ -284,8 +320,8 @@ export function App() {
   // explain modal
   const [explainRow, setExplainRow] = useState<Recommendation | null>(null);
 
-  // comment modal for qty deviation
-  const [commentState, setCommentState] = useState<{item: DraftItem; newQty: number; recommended: number} | null>(null);
+  // edit qty modal (pencil button opens this)
+  const [editQtyState, setEditQtyState] = useState<{item: DraftItem} | null>(null);
 
   // recommendations table pagination
   const [recPage, setRecPage] = useState(0);
@@ -504,15 +540,6 @@ export function App() {
     }
   }
 
-  function requestQtyChange(item: DraftItem, newQty: number) {
-    const recommended = item.recommended_qty;
-    if (newQty !== recommended) {
-      setCommentState({item, newQty, recommended});
-    } else {
-      applyQtyChange(item, newQty, '');
-    }
-  }
-
   async function applyQtyChange(item: DraftItem, newQty: number, reason: string) {
     if (!currentDraft) return;
     await fetchJSON(apiUrl(`/api/drafts/${currentDraft.batch.id}/items/${item.id}`), {
@@ -520,7 +547,7 @@ export function App() {
       body: JSON.stringify({manager_qty: newQty, reason}),
     });
     await openDraft(currentDraft.batch.id);
-    setCommentState(null);
+    setEditQtyState(null);
   }
 
   async function removeDraftItem(itemId: number) {
@@ -573,13 +600,11 @@ export function App() {
     <div className="shell">
       {/* modals */}
       {explainRow && <ExplainModal row={explainRow} onClose={() => setExplainRow(null)} />}
-      {commentState && (
-        <CommentModal
-          sku={commentState.item.sku_name}
-          recommended={commentState.recommended}
-          newQty={commentState.newQty}
-          onConfirm={reason => applyQtyChange(commentState.item, commentState.newQty, reason)}
-          onCancel={() => setCommentState(null)}
+      {editQtyState && (
+        <EditQtyModal
+          item={editQtyState.item}
+          onConfirm={(qty, reason) => applyQtyChange(editQtyState.item, qty, reason)}
+          onCancel={() => setEditQtyState(null)}
         />
       )}
 
@@ -795,16 +820,12 @@ export function App() {
                       </div>
                     </div>
                     <div className="inline-actions">
-                      <input
-                        type="number"
-                        min={0}
-                        value={item.manager_qty}
-                        style={{width: 70}}
-                        onChange={e => {
-                          const v = Number(e.target.value);
-                          if (!isNaN(v) && v >= 0) requestQtyChange(item, v);
-                        }}
-                      />
+                      <button
+                        title="Изменить количество"
+                        onClick={() => setEditQtyState({item})}
+                        style={{padding: '5px 12px', borderRadius: 6, border: '1px solid #334155', background: '#0f172a', color: '#94a3b8', cursor: 'pointer', fontSize: '0.85em'}}>
+                        ✏ {item.manager_qty} шт
+                      </button>
                       <button className="danger-btn" onClick={() => removeDraftItem(item.id)}>🗑</button>
                     </div>
                   </div>

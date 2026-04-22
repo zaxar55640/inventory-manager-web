@@ -29,7 +29,7 @@ try {
 } catch {}
 
 db.prepare("UPDATE purchase_order_batches SET is_draft = 0 WHERE status = 'completed'").run();
-db.prepare("DELETE FROM purchase_order_batches WHERE is_draft = 1").run();
+try { db.prepare("DELETE FROM purchase_order_batches WHERE is_draft = 1").run(); } catch {}
 
 app.get('/api/suppliers', (_req, res) => {
   const rows = db.prepare(`
@@ -417,13 +417,15 @@ app.get('/api/products-catalog', (req, res) => {
     'available_qty','to_order','status','last_sale_date','days_since_last_sale',
     'is_seasonal','nlq_score','peak_months']);
   const col = allowed.has(sortBy) ? sortBy : 'r.sku_name';
-  const colPfx = ['last_sale_date','days_since_last_sale','is_seasonal','nlq_score','subgroup'].includes(sortBy)
+  const colPfx = ['last_sale_date','days_since_last_sale','is_seasonal','nlq_score'].includes(sortBy)
     ? `nl.${sortBy}`
-    : ['available_qty','supplier_name','to_order','status','abc_class','xyz_class','pre_season_flag','peak_months','sku_name'].includes(sortBy)
+    : sortBy === 'subgroup' ? `ss.subgroup`
+    : sortBy === 'status' ? `r.status_ranked`
+    : ['available_qty','supplier_name','to_order','abc_class','xyz_class','pre_season_flag','peak_months','sku_name'].includes(sortBy)
     ? `r.${sortBy}`
     : `r.sku_name`;
 
-  const whereClauses = [`r.calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)`];
+  const whereClauses = [];
   const params = [];
 
   if (q) {
@@ -433,14 +435,49 @@ app.get('/api/products-catalog', (req, res) => {
   if (subgrp) { whereClauses.push(`ss.subgroup = ?`); params.push(subgrp); }
   if (supp)   { whereClauses.push(`r.supplier_name = ?`); params.push(supp); }
 
-  const where = 'WHERE ' + whereClauses.join(' AND ');
+  const where = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
 
+  // Dedup purchase_recommendations by sku_name (multiple stores / multiple runs same day)
   const baseSql = `
-    FROM purchase_recommendations r
+    FROM (
+      SELECT sku_name, MAX(item_ref) AS item_ref,
+             MAX(supplier_name) AS supplier_name,
+             SUM(to_order)      AS to_order,
+             SUM(available_qty) AS available_qty,
+             MIN(CASE status
+               WHEN 'urgent_order'                THEN '1_urgent_order'
+               WHEN 'pre_season_order'            THEN '2_pre_season_order'
+               WHEN 'order'                       THEN '3_order'
+               WHEN 'limited_history_manual_check'THEN '4_limited_history_manual_check'
+               WHEN 'new_item_manual_check'       THEN '5_new_item_manual_check'
+               WHEN 'ok'                          THEN '6_ok'
+               WHEN 'overstock_risk'              THEN '7_overstock_risk'
+               ELSE '8_' || COALESCE(status,'')
+             END)               AS status_ranked,
+             MAX(pre_season_flag) AS pre_season_flag,
+             MAX(peak_months)   AS peak_months,
+             MAX(abc_class)     AS abc_class,
+             MAX(xyz_class)     AS xyz_class,
+             MAX(explain_text)  AS explain_text
+      FROM purchase_recommendations
+      WHERE calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
+      GROUP BY sku_name
+    ) r
     LEFT JOIN products p ON p.sku_name = r.sku_name
-    LEFT JOIN non_liquid_snapshot nl
-      ON nl.sku_name = r.sku_name
-     AND nl.snapshot_date = (SELECT MAX(snapshot_date) FROM non_liquid_snapshot)
+    LEFT JOIN (
+      SELECT sku_name,
+             MIN(COALESCE(NULLIF(subgroup,''), NULLIF(subgroup_ref,''), 'Без группы')) AS subgroup
+      FROM stock_snapshots
+      WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM stock_snapshots)
+      GROUP BY sku_name
+    ) ss ON ss.sku_name = r.sku_name
+    LEFT JOIN (
+      SELECT sku_name, last_sale_date,
+             CAST(julianday('now') - julianday(last_sale_date) AS INTEGER) AS days_since_last_sale,
+             is_seasonal, season_note, nlq_score
+      FROM non_liquid_snapshot
+      WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM non_liquid_snapshot)
+    ) nl ON nl.sku_name = r.sku_name
     ${where}
   `;
 
@@ -448,9 +485,11 @@ app.get('/api/products-catalog', (req, res) => {
     const total = db.prepare(`SELECT COUNT(*) AS total ${baseSql}`).get(...params).total;
     const rows  = db.prepare(`
       SELECT r.sku_name, r.item_ref, p.barcode,
-             nl.subgroup,
+             ss.subgroup,
              r.available_qty,
-             r.supplier_name, r.to_order, r.status,
+             r.supplier_name,
+             r.to_order,
+             SUBSTR(r.status_ranked, 3) AS status,
              r.pre_season_flag, r.peak_months,
              r.abc_class, r.xyz_class, r.explain_text,
              nl.last_sale_date, nl.days_since_last_sale,
