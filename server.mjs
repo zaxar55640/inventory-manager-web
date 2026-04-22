@@ -33,27 +33,61 @@ db.prepare("DELETE FROM purchase_order_batches WHERE is_draft = 1").run();
 
 app.get('/api/suppliers', (_req, res) => {
   const rows = db.prepare(`
-    SELECT supplier_name, COUNT(*) AS items_count, ROUND(SUM(to_order), 2) AS total_to_order,
-           MAX(coverage_days) AS coverage_days
-    FROM purchase_recommendations
-    WHERE calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
-      AND to_order > 0
-    GROUP BY supplier_name
+    SELECT r.supplier_name,
+           COUNT(*) AS items_count,
+           ROUND(SUM(r.to_order), 2) AS total_to_order,
+           MAX(r.coverage_days) AS coverage_days,
+           COALESCE(s.lead_time_days, 7)   AS lead_time_days,
+           COALESCE(s.order_cycle_days, 7) AS order_cycle_days,
+           s.moq_qty
+    FROM purchase_recommendations r
+    LEFT JOIN suppliers s ON s.supplier_name = r.supplier_name
+    WHERE r.calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
+      AND r.to_order > 0
+    GROUP BY r.supplier_name
     ORDER BY total_to_order DESC
   `).all();
   res.json(rows);
 });
 
+app.patch('/api/suppliers/:name/settings', (req, res) => {
+  const name = req.params.name;
+  const {lead_time_days, order_cycle_days, moq_qty} = req.body;
+  const sup = db.prepare('SELECT id FROM suppliers WHERE supplier_name = ?').get(name);
+  if (!sup) return res.status(404).json({error: 'supplier not found'});
+  if (lead_time_days != null)
+    db.prepare('UPDATE suppliers SET lead_time_days = ? WHERE supplier_name = ?').run(Number(lead_time_days), name);
+  if (order_cycle_days != null)
+    db.prepare('UPDATE suppliers SET order_cycle_days = ? WHERE supplier_name = ?').run(Number(order_cycle_days), name);
+  if (moq_qty != null)
+    db.prepare('UPDATE suppliers SET moq_qty = ? WHERE supplier_name = ?').run(moq_qty === '' ? null : Number(moq_qty), name);
+  res.json({ok: true});
+});
+
 app.get('/api/recommendations', (req, res) => {
   const supplier = String(req.query.supplier || '');
   const rows = db.prepare(`
-    SELECT id, supplier_name, sku_name, item_ref, norm_name, available_qty, to_order, recommended_stock,
-           demand_mode, coverage_days, coverage_source, system_note
+    SELECT id, supplier_name, sku_name, item_ref, norm_name,
+           available_qty, in_transit_qty, to_order, recommended_stock,
+           demand_mode, abc_class, xyz_class,
+           coverage_days, coverage_source, system_note,
+           lead_time_days, order_cycle_days,
+           cycle_stock, safety_stock,
+           pre_season_flag, peak_months, explain_text, status
     FROM purchase_recommendations
     WHERE calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
       AND supplier_name = ?
       AND to_order > 0
-    ORDER BY to_order DESC, sku_name ASC
+    ORDER BY
+      CASE status
+        WHEN 'urgent_order'    THEN 1
+        WHEN 'pre_season_order' THEN 2
+        WHEN 'order'           THEN 3
+        WHEN 'limited_history_manual_check' THEN 4
+        ELSE 5
+      END ASC,
+      to_order DESC,
+      sku_name ASC
   `).all(supplier);
   res.json(rows);
 });
@@ -62,8 +96,13 @@ app.get('/api/search', (req, res) => {
   const q = `%${String(req.query.q || '').trim()}%`;
   if (q === '%%') return res.json([]);
   const rows = db.prepare(`
-    SELECT id, supplier_name, sku_name, item_ref, norm_name, available_qty, to_order, recommended_stock,
-           demand_mode, coverage_days, coverage_source, system_note
+    SELECT id, supplier_name, sku_name, item_ref, norm_name,
+           available_qty, in_transit_qty, to_order, recommended_stock,
+           demand_mode, abc_class, xyz_class,
+           coverage_days, coverage_source, system_note,
+           lead_time_days, order_cycle_days,
+           cycle_stock, safety_stock,
+           pre_season_flag, peak_months, explain_text, status
     FROM purchase_recommendations
     WHERE calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
       AND (sku_name LIKE ? OR norm_name LIKE ? OR item_ref LIKE ?)
@@ -73,7 +112,42 @@ app.get('/api/search', (req, res) => {
   res.json(rows);
 });
 
+app.get('/api/dashboard', (_req, res) => {
+  const stats = db.prepare(`
+    SELECT
+      COUNT(CASE WHEN status IN ('urgent_order','order','pre_season_order','limited_history_manual_check') AND to_order > 0 THEN 1 END) AS total_to_order,
+      COUNT(CASE WHEN status = 'urgent_order'     THEN 1 END) AS urgent_count,
+      COUNT(CASE WHEN status = 'pre_season_order' THEN 1 END) AS pre_season_count,
+      COUNT(CASE WHEN status = 'overstock_risk'   THEN 1 END) AS overstock_count,
+      COUNT(CASE WHEN status = 'new_item_manual_check' THEN 1 END) AS new_items_count
+    FROM purchase_recommendations
+    WHERE calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
+  `).get();
+  res.json(stats || {});
+});
+
+app.get('/api/decisions', (_req, res) => {
+  const rows = db.prepare(`
+    SELECT md.decision_date, md.manager_name, md.sku_name, md.system_qty, md.manager_qty,
+           md.delta_qty, md.reason, md.supplier_name
+    FROM manager_decisions md
+    ORDER BY md.id DESC
+    LIMIT 200
+  `).all();
+  res.json(rows);
+});
+
 app.get('/api/non-liquid/groups', (_req, res) => {
+  const snapshotExists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='non_liquid_snapshot'`).get();
+  if (snapshotExists) {
+    const rows = db.prepare(`
+      SELECT DISTINCT subgroup
+      FROM non_liquid_snapshot
+      WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM non_liquid_snapshot)
+      ORDER BY subgroup ASC
+    `).all();
+    return res.json(rows.map((r) => r.subgroup || 'Без группы'));
+  }
   try {
     db.exec(`ALTER TABLE stock_snapshots ADD COLUMN subgroup TEXT`);
   } catch {}
@@ -90,17 +164,17 @@ app.get('/api/non-liquid/groups', (_req, res) => {
   res.json(rows.map((r) => r.subgroup));
 });
 
-app.get('/api/non-liquid', (req, res) => {
+function ensureNonLiquidColumns() {
   try {
     db.exec(`ALTER TABLE stock_snapshots ADD COLUMN subgroup TEXT`);
   } catch {}
   try {
     db.exec(`ALTER TABLE stock_snapshots ADD COLUMN subgroup_ref TEXT`);
   } catch {}
-  const subgroup = String(req.query.subgroup || '').trim();
-  const q = String(req.query.q || '').trim();
-  const qLike = `%${q}%`;
-  const rows = db.prepare(`
+}
+
+function buildNonLiquidBaseSql() {
+  return `
     WITH latest_stock AS (
       SELECT
         s.store,
@@ -145,9 +219,77 @@ app.get('/api/non-liquid', (req, res) => {
     WHERE COALESCE(s4.sales_qty_4m, 0) <= 0
       AND (? = '' OR ls.subgroup = ?)
       AND (? = '' OR ls.sku_name LIKE ? OR ls.item_ref LIKE ? OR ls.norm_name LIKE ?)
-    ORDER BY ls.subgroup ASC, ls.available_qty DESC, ls.sku_name ASC
-  `).all(subgroup, subgroup, q, qLike, qLike, qLike);
+  `;
+}
+
+app.get('/api/non-liquid', (req, res) => {
+  const subgroup = String(req.query.subgroup || '').trim();
+  const q = String(req.query.q || '').trim();
+  const qLike = `%${q}%`;
+  const snapshotExists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='non_liquid_snapshot'`).get();
+
+  if (snapshotExists) {
+    const rows = db.prepare(`
+      SELECT store, store_ref, item_ref, sku_name, norm_name, subgroup, available_qty, sales_qty_4m,
+             last_sale_date, days_since_last_sale, is_seasonal, season_note, nlq_score
+      FROM non_liquid_snapshot
+      WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM non_liquid_snapshot)
+        AND (? = '' OR subgroup = ?)
+        AND (? = '' OR sku_name LIKE ? OR item_ref LIKE ? OR norm_name LIKE ?)
+      ORDER BY COALESCE(days_since_last_sale, 99999) DESC, available_qty DESC
+    `).all(subgroup, subgroup, q, qLike, qLike, qLike);
+    return res.json(rows);
+  }
+
+  ensureNonLiquidColumns();
+  const baseSql = buildNonLiquidBaseSql();
+  const params = [subgroup, subgroup, q, qLike, qLike, qLike];
+  const rows = db.prepare(`
+    ${baseSql}
+    ORDER BY COALESCE(days_since_last_sale, 99999) DESC, available_qty DESC
+  `).all(...params);
   res.json(rows);
+});
+
+app.get('/api/non-liquid-paged', (req, res) => {
+  const subgroup = String(req.query.subgroup || '').trim();
+  const q = String(req.query.q || '').trim();
+  const qLike = `%${q}%`;
+  const limitRaw = Number(req.query.limit || 200);
+  const offsetRaw = Number(req.query.offset || 0);
+  const limit = Math.max(1, Math.min(500, Number.isFinite(limitRaw) ? limitRaw : 200));
+  const offset = Math.max(0, Number.isFinite(offsetRaw) ? offsetRaw : 0);
+  const snapshotExists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='non_liquid_snapshot'`).get();
+
+  if (snapshotExists) {
+    const whereSql = `
+      FROM non_liquid_snapshot
+      WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM non_liquid_snapshot)
+        AND (? = '' OR subgroup = ?)
+        AND (? = '' OR sku_name LIKE ? OR item_ref LIKE ? OR norm_name LIKE ?)
+    `;
+    const params = [subgroup, subgroup, q, qLike, qLike, qLike];
+    const total = db.prepare(`SELECT COUNT(*) AS total ${whereSql}`).get(...params).total;
+    const rows = db.prepare(`
+      SELECT store, store_ref, item_ref, sku_name, norm_name, subgroup, available_qty, sales_qty_4m,
+             last_sale_date, days_since_last_sale, is_seasonal, season_note, nlq_score
+      ${whereSql}
+      ORDER BY COALESCE(days_since_last_sale, 99999) DESC, available_qty DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset);
+    return res.json({items: rows, total, limit, offset, has_more: offset + rows.length < total});
+  }
+
+  ensureNonLiquidColumns();
+  const baseSql = buildNonLiquidBaseSql();
+  const params = [subgroup, subgroup, q, qLike, qLike, qLike];
+  const total = db.prepare(`SELECT COUNT(*) AS total FROM (${baseSql})`).get(...params).total;
+  const rows = db.prepare(`
+    ${baseSql}
+    ORDER BY COALESCE(days_since_last_sale, 99999) DESC, available_qty DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset);
+  res.json({items: rows, total, limit, offset, has_more: offset + rows.length < total});
 });
 
 app.post('/api/coverage/supplier', (req, res) => {
@@ -261,8 +403,31 @@ app.post('/api/orders/:id/complete', (req, res) => {
 });
 
 const distDir = path.resolve(__dirname, 'dist');
-app.use(express.static(distDir));
-app.get('*', (_req, res) => res.sendFile(path.join(distDir, 'index.html')));
+app.use('/inventory-manager-web/assets', express.static(path.join(distDir, 'assets'), {
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+  }
+}));
+app.use(express.static(distDir, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('index.html')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Surrogate-Control', 'no-store');
+    }
+  }
+}));
+app.get('*', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+  res.sendFile(path.join(distDir, 'index.html'));
+});
 
 const port = Number(process.env.PORT || 8787);
 app.listen(port, '0.0.0.0', () => {
