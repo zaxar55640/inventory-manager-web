@@ -101,13 +101,23 @@ function StatusDot({status}: {status: string}) {
 }
 
 /** ABC/XYZ badge */
+const ABC_TIPS: Record<string, string> = {
+  A: 'A — топ 50% по объёму продаж. Высокий приоритет закупки.',
+  B: 'B — следующие 30% по объёму. Средний приоритет.',
+  C: 'C — оставшиеся 20%. Низкий приоритет, заказывать осторожно.',
+};
+const XYZ_TIPS: Record<string, string> = {
+  X: 'X — стабильный спрос (CV < 0.5). Прогноз надёжен.',
+  Y: 'Y — умеренная волатильность (CV 0.5–1.0). Прогноз приблизителен.',
+  Z: 'Z — нестабильный / сезонный спрос (CV ≥ 1.0). Высокий буфер страховки.',
+};
 function ClassBadge({abc, xyz}: {abc: string; xyz: string}) {
   const abcColor: Record<string, string> = {A: '#22c55e', B: '#eab308', C: '#94a3b8'};
   const xyzColor: Record<string, string> = {X: '#22c55e', Y: '#f59e0b', Z: '#ef4444'};
   return (
     <span style={{display: 'inline-flex', gap: 3, fontSize: '0.72em'}}>
-      {abc && <span style={{background: abcColor[abc] || '#ccc', color: '#fff', borderRadius: 3, padding: '1px 5px', fontWeight: 700}}>{abc}</span>}
-      {xyz && <span style={{background: xyzColor[xyz] || '#ccc', color: '#fff', borderRadius: 3, padding: '1px 5px', fontWeight: 700}}>{xyz}</span>}
+      {abc && <span title={ABC_TIPS[abc] || abc} style={{background: abcColor[abc] || '#ccc', color: '#fff', borderRadius: 3, padding: '1px 5px', fontWeight: 700, cursor: 'help'}}>{abc}</span>}
+      {xyz && <span title={XYZ_TIPS[xyz] || xyz} style={{background: xyzColor[xyz] || '#ccc', color: '#fff', borderRadius: 3, padding: '1px 5px', fontWeight: 700, cursor: 'help'}}>{xyz}</span>}
     </span>
   );
 }
@@ -261,6 +271,18 @@ export function App() {
   // comment modal for qty deviation
   const [commentState, setCommentState] = useState<{item: DraftItem; newQty: number; recommended: number} | null>(null);
 
+  // recommendations table pagination
+  const [recPage, setRecPage] = useState(0);
+  const REC_PAGE_SIZE = 50;
+
+  // order items pagination
+  const [orderPage, setOrderPage] = useState(0);
+  const ORDER_PAGE_SIZE = 50;
+
+  // "Добавить" button feedback
+  const [addingId, setAddingId] = useState<number | null>(null);
+  const [addedIds, setAddedIds] = useState<Set<number>>(new Set());
+
   // non-liquid state
   const [nonLiquidItems, setNonLiquidItems] = useState<NonLiquidItem[]>([]);
   const [nonLiquidGroups, setNonLiquidGroups] = useState<string[]>([]);
@@ -329,6 +351,7 @@ export function App() {
 
   async function openOrderDetail(id: number) {
     setOpenOrder(await fetchJSON<OrderDetail>(apiUrl(`/api/orders/${id}`)));
+    setOrderPage(0);
   }
 
   // ── effects ─────────────────────────────────────────────────────────────────
@@ -356,6 +379,8 @@ export function App() {
   useEffect(() => {
     if (!selectedSupplier || mode !== 'single') return;
     setLoading(true);
+    setRecPage(0);
+    setAddedIds(new Set());
     fetchJSON<Recommendation[]>(apiUrl(`/api/recommendations?supplier=${encodeURIComponent(selectedSupplier)}`))
       .then(setRecommendations)
       .finally(() => setLoading(false));
@@ -391,12 +416,20 @@ export function App() {
   }
 
   async function addRecommendationToDraft(row: Recommendation) {
-    if (!currentDraft) return;
-    await fetchJSON(apiUrl(`/api/drafts/${currentDraft.batch.id}/items`), {
-      method: 'POST',
-      body: JSON.stringify({item: {recommendation_id: row.id, manager_qty: row.to_order, reason: '', supplier_name: row.supplier_name}}),
-    });
-    await openDraft(currentDraft.batch.id);
+    if (!currentDraft || addingId !== null) return;
+    setAddingId(row.id);
+    try {
+      await fetchJSON(apiUrl(`/api/drafts/${currentDraft.batch.id}/items`), {
+        method: 'POST',
+        body: JSON.stringify({item: {recommendation_id: row.id, manager_qty: row.to_order, reason: '', supplier_name: row.supplier_name}}),
+      });
+      setAddedIds(prev => new Set([...prev, row.id]));
+      await openDraft(currentDraft.batch.id);
+    } catch (err) {
+      console.error('addRecommendationToDraft failed', err);
+    } finally {
+      setAddingId(null);
+    }
   }
 
   function requestQtyChange(item: DraftItem, newQty: number) {
@@ -449,9 +482,18 @@ export function App() {
   const currentSupplier = suppliers.find(s => s.supplier_name === selectedSupplier);
 
   const filteredRecs = useMemo(() => {
+    setRecPage(0);
     const q = listSearch.toLowerCase();
     return recommendations.filter(r => !q || r.sku_name.toLowerCase().includes(q));
   }, [recommendations, listSearch]);
+
+  const recPagedItems = useMemo(() => filteredRecs.slice(recPage * REC_PAGE_SIZE, (recPage + 1) * REC_PAGE_SIZE), [filteredRecs, recPage]);
+  const recTotalPages = Math.max(1, Math.ceil(filteredRecs.length / REC_PAGE_SIZE));
+
+  const orderPagedItems = useMemo(() => {
+    if (!openOrder) return [];
+    return openOrder.items.slice(orderPage * ORDER_PAGE_SIZE, (orderPage + 1) * ORDER_PAGE_SIZE);
+  }, [openOrder, orderPage]);
 
   // ── render ────────────────────────────────────────────────────────────────
 
@@ -553,13 +595,24 @@ export function App() {
             {currentDraft.batch.draft_mode === 'single' && (
               <section className="card table-card">
                 {loading && <div className="loading-block"><div className="spinner" /><span>Загружаю…</span></div>}
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8}}>
+                  <span className="meta">{filteredRecs.length} позиций к заказу</span>
+                  <span style={{fontSize: '0.78em', color: '#64748b'}}>
+                    <span style={{color: '#22c55e', fontWeight: 700}}>A</span>=топ 50%&nbsp;
+                    <span style={{color: '#eab308', fontWeight: 700}}>B</span>=30%&nbsp;
+                    <span style={{color: '#94a3b8', fontWeight: 700}}>C</span>=20%&nbsp;&nbsp;
+                    <span style={{color: '#22c55e', fontWeight: 700}}>X</span>=стабильный&nbsp;
+                    <span style={{color: '#f59e0b', fontWeight: 700}}>Y</span>=умеренный&nbsp;
+                    <span style={{color: '#ef4444', fontWeight: 700}}>Z</span>=нестабильный спрос
+                  </span>
+                </div>
                 <div className="table-scroll-hint"><div className="table-pan-x">
                   <table>
                     <thead>
                       <tr>
                         <th style={{width: 24}} title="Статус"></th>
                         <th>Товар</th>
-                        <th>Кл.</th>
+                        <th title="ABC — по объёму продаж. XYZ — по стабильности спроса. Наведи на значок для деталей.">Кл. ⓘ</th>
                         <th style={{textAlign: 'right'}}>Остаток</th>
                         <th style={{textAlign: 'right'}}>Закупить</th>
                         <th style={{width: 40}}></th>
@@ -567,7 +620,7 @@ export function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredRecs.map(row => (
+                      {recPagedItems.map(row => (
                         <tr key={row.id} style={{
                           background: row.status === 'urgent_order' ? 'rgba(239,68,68,.07)'
                             : row.status === 'pre_season_order' ? 'rgba(245,158,11,.07)'
@@ -593,13 +646,30 @@ export function App() {
                             </button>
                           </td>
                           <td>
-                            <button className="primary ghost" onClick={() => addRecommendationToDraft(row)}>Добавить</button>
+                            <button
+                              onClick={() => addRecommendationToDraft(row)}
+                              disabled={addingId === row.id}
+                              style={{
+                                padding: '4px 12px', borderRadius: 6, border: 'none', cursor: addingId === row.id ? 'default' : 'pointer',
+                                fontWeight: 600, fontSize: '0.82em', transition: 'background .2s',
+                                background: addedIds.has(row.id) ? '#22c55e' : '#2563eb',
+                                color: '#fff',
+                              }}>
+                              {addingId === row.id ? '…' : addedIds.has(row.id) ? '✓ Добавлен' : 'Добавить'}
+                            </button>
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div></div>
+                {recTotalPages > 1 && (
+                  <div className="inline-actions" style={{marginTop: 12, justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8}}>
+                    <button className="ghost-btn" disabled={recPage === 0} onClick={() => setRecPage(p => p - 1)}>← Назад</button>
+                    <span className="meta">Стр. {recPage + 1} из {recTotalPages} · {filteredRecs.length} позиций</span>
+                    <button className="ghost-btn" disabled={recPage >= recTotalPages - 1} onClick={() => setRecPage(p => p + 1)}>Вперёд →</button>
+                  </div>
+                )}
               </section>
             )}
 
@@ -721,9 +791,11 @@ export function App() {
             </div>
             {openOrder && (
               <div className="card search-card" style={{marginTop: 16}}>
-                <div className="section-head"><div><span className="eyebrow">Состав заявки</span><h2>#{openOrder.batch.id} · {openOrder.batch.supplier_name}</h2></div></div>
+                <div className="section-head"><div><span className="eyebrow">Состав заявки</span><h2>#{openOrder.batch.id} · {openOrder.batch.supplier_name}</h2><div className="meta">{openOrder.items.length} позиций</div></div>
+                  <button className="ghost-btn" style={{alignSelf: 'flex-start'}} onClick={() => setOpenOrder(null)}>✕ Закрыть</button>
+                </div>
                 <div className="search-results">
-                  {openOrder.items.map(item => (
+                  {orderPagedItems.map(item => (
                     <div key={item.id} className="search-item">
                       <div>
                         <strong>{item.sku_name}</strong>
@@ -732,6 +804,13 @@ export function App() {
                     </div>
                   ))}
                 </div>
+                {openOrder.items.length > ORDER_PAGE_SIZE && (
+                  <div className="inline-actions" style={{marginTop: 12, justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8}}>
+                    <button className="ghost-btn" disabled={orderPage === 0} onClick={() => setOrderPage(p => p - 1)}>← Назад</button>
+                    <span className="meta">Стр. {orderPage + 1} из {Math.ceil(openOrder.items.length / ORDER_PAGE_SIZE)}</span>
+                    <button className="ghost-btn" disabled={(orderPage + 1) * ORDER_PAGE_SIZE >= openOrder.items.length} onClick={() => setOrderPage(p => p + 1)}>Вперёд →</button>
+                  </div>
+                )}
               </div>
             )}
           </section>
