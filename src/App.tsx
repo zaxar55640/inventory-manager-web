@@ -555,6 +555,11 @@ export function App() {
   const [catalogGroups, setCatalogGroups] = useState<string[]>([]);
   const CATALOG_LIMIT = 100;
 
+  // sidebar collapse
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // catalog2 tree panel collapse
+  const [c2TreeOpen, setC2TreeOpen] = useState(true);
+
   // catalog2 (tree catalog from ping JSON)
   const [c2Items, setC2Items] = useState<Catalog2Item[]>([]);
   const [c2Total, setC2Total] = useState(0);
@@ -893,8 +898,20 @@ export function App() {
 
   // ── render ────────────────────────────────────────────────────────────────
 
+  const RAIL_W = 320;
+
   return (
-    <div className="shell">
+    <div className="shell" style={{gridTemplateColumns: sidebarOpen ? `${RAIL_W}px 1fr` : '0px 1fr'}}>
+      {/* sidebar toggle button */}
+      <button
+        className="sidebar-toggle"
+        style={{left: sidebarOpen ? RAIL_W - 14 : 8}}
+        onClick={() => setSidebarOpen(v => !v)}
+        title={sidebarOpen ? 'Скрыть меню' : 'Показать меню'}
+      >
+        {sidebarOpen ? '‹' : '›'}
+      </button>
+
       {/* modals */}
       {c2Modal && (
         <ProductDetailModal2
@@ -917,7 +934,7 @@ export function App() {
         />
       )}
 
-      <aside className="rail">
+      <aside className={sidebarOpen ? 'rail' : 'rail rail-collapsed'}>
         <div className="brand">
           <h1>Закупки</h1>
           <span style={{fontSize: '0.7em', color: '#22c55e', fontWeight: 700, letterSpacing: '0.05em'}}>v2 · {new Date().toLocaleDateString('ru-RU')}</span>
@@ -1465,8 +1482,9 @@ export function App() {
 
             {/* Left tree panel */}
             <div style={{
-              width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column',
-              background: '#0a1628', borderRight: '1px solid #1e293b', overflow: 'hidden',
+              width: c2TreeOpen ? 260 : 0, flexShrink: 0, display: 'flex', flexDirection: 'column',
+              background: '#0a1628', borderRight: c2TreeOpen ? '1px solid #1e293b' : 'none',
+              overflow: 'hidden', transition: 'width .22s ease',
             }}>
               <div style={{padding: '12px 12px 8px', borderBottom: '1px solid #1e293b', flexShrink: 0}}>
                 <div style={{fontSize: '0.68em', color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700}}>Группы товаров</div>
@@ -1522,7 +1540,16 @@ export function App() {
               {/* Toolbar */}
               <div style={{padding: '10px 14px 8px', borderBottom: '1px solid #1e293b', background: '#0a1628', flexShrink: 0}}>
                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 6}}>
-                  {/* Breadcrumb */}
+                  {/* Tree toggle + Breadcrumb */}
+                  <button
+                    onClick={() => setC2TreeOpen(v => !v)}
+                    title={c2TreeOpen ? 'Скрыть дерево' : 'Показать дерево'}
+                    style={{
+                      background: 'none', border: '1px solid #1e293b', borderRadius: 6,
+                      color: '#475569', cursor: 'pointer', padding: '3px 8px', fontSize: '0.8em',
+                      flexShrink: 0,
+                    }}
+                  >{c2TreeOpen ? '◀ Дерево' : '▶ Дерево'}</button>
                   <div style={{display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center', fontSize: '0.78em', color: '#475569', maxWidth: '60%'}}>
                     <span
                       style={{cursor: 'pointer', color: c2Path === '' ? '#f1f5f9' : '#3b82f6', fontWeight: c2Path === '' ? 700 : 400}}

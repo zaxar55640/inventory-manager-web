@@ -12,9 +12,12 @@
 * { box-sizing: border-box; }
 body { margin: 0; font-family: 'Manrope', sans-serif; background: radial-gradient(circle at top left, rgba(240,195,107,.16), transparent 28%), radial-gradient(circle at bottom right, rgba(112,224,181,.14), transparent 22%), #0d1117; color: var(--text); overflow-x: hidden; }
 button, input, select, textarea { font: inherit; }
-.shell { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; position: relative; isolation: isolate; width: 100%; max-width: 100%; overflow-x: clip; }
-.rail { padding: 28px; border-right: 1px solid var(--line); background: rgba(8,11,16,.65); backdrop-filter: blur(18px); position: relative; z-index: 1; min-width: 0; }
-.main { padding: 28px; display: grid; gap: 22px; position: relative; z-index: 3; pointer-events: auto; min-width: 0; width: 100%; }
+.shell { display: grid; min-height: 100vh; position: relative; isolation: isolate; width: 100%; max-width: 100%; overflow-x: clip; transition: grid-template-columns .22s ease; }
+.rail { padding: 28px; border-right: 1px solid var(--line); background: rgba(8,11,16,.65); backdrop-filter: blur(18px); position: relative; z-index: 1; overflow: hidden; transition: padding .22s ease, opacity .18s ease; }
+.rail.rail-collapsed { padding: 0 !important; opacity: 0; pointer-events: none; }
+.sidebar-toggle { position: fixed; top: 18px; z-index: 100; width: 28px; height: 28px; border-radius: 50%; background: rgba(15,20,29,.92); border: 1px solid var(--line); color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 13px; transition: left .22s ease, background .15s; box-shadow: 0 2px 12px rgba(0,0,0,.4); }
+.sidebar-toggle:hover { background: rgba(240,195,107,.18); color: var(--gold); }
+.main { padding: 28px; display: grid; gap: 22px; position: relative; z-index: 3; pointer-events: auto; min-width: 0; width: 100%; transition: padding .1s; }
 .brand h1, .hero h2, .orders-card h2, .search-card h2 { font-family: 'Prata', serif; font-weight: 400; margin: 8px 0; }
 .eyebrow { text-transform: uppercase; letter-spacing: .18em; color: var(--gold); font-size: 11px; }
 .card, .panel, .order-tile { background: var(--panel); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 24px 80px rgba(0,0,0,.28); }
