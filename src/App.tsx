@@ -1043,8 +1043,8 @@ export function App() {
   const [c2SortBy, setC2SortBy] = useState('qty');
   const [c2SortDir, setC2SortDir] = useState<'asc'|'desc'>('desc');
   const [c2HasStock, setC2HasStock] = useState(false);
-  const [c2SearchFocused, setC2SearchFocused] = useState(false);
-  const [c2SearchGroupHits, setC2SearchGroupHits] = useState<C2GroupResult[]>([]);
+  const [c2TreeSearch, setC2TreeSearch] = useState('');
+  const [c2TreeSearchResults, setC2TreeSearchResults] = useState<C2GroupResult[]>([]);
   const [c2Forecast, setC2Forecast] = useState<C2Forecast | null>(null);
   const [c2ForecastLoading, setC2ForecastLoading] = useState(false);
 
@@ -1132,12 +1132,12 @@ export function App() {
     finally { setC2ForecastLoading(false); }
   }
 
-  async function c2FetchGroupHints(q: string) {
-    if (q.length < 2) { setC2SearchGroupHits([]); return; }
+  async function c2SearchGroups(q: string) {
+    if (q.length < 2) { setC2TreeSearchResults([]); return; }
     try {
       const data = await fetchJSON<C2GroupResult[]>(apiUrl(`/api/catalog2/search-groups?q=${encodeURIComponent(q)}`));
-      setC2SearchGroupHits(data.slice(0, 6));
-    } catch { setC2SearchGroupHits([]); }
+      setC2TreeSearchResults(data);
+    } catch { setC2TreeSearchResults([]); }
   }
 
   async function c2LoadSales(code: string, from: string, to: string, gran: C2Gran) {
@@ -1285,10 +1285,9 @@ export function App() {
   }, [c2Path, c2Search, c2SortBy, c2SortDir, c2HasStock]);
 
   useEffect(() => {
-    if (c2Search.length < 2) { setC2SearchGroupHits([]); return; }
-    const t = setTimeout(() => c2FetchGroupHints(c2Search), 200);
+    const t = setTimeout(() => c2SearchGroups(c2TreeSearch), 250);
     return () => clearTimeout(t);
-  }, [c2Search]);
+  }, [c2TreeSearch]);
 
   useEffect(() => {
     if (!c2Modal) { setC2Forecast(null); return; }
@@ -1996,10 +1995,36 @@ export function App() {
               background: '#0a1628', borderRight: c2TreeOpen ? '1px solid #1e293b' : 'none',
               overflow: 'hidden', transition: 'width .22s ease',
             }}>
-              <div style={{padding: '8px 10px 6px', borderBottom: '1px solid #1e293b', flexShrink: 0}}>
-                <div style={{fontSize: '0.68em', color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700}}>Группы товаров</div>
+              <div style={{padding: '10px 10px 8px', borderBottom: '1px solid #1e293b', flexShrink: 0}}>
+                <div style={{fontSize: '0.68em', color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, marginBottom: 6}}>Группы товаров</div>
+                <input
+                  style={{width: '100%', boxSizing: 'border-box', background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, color: '#f1f5f9', padding: '4px 8px', fontSize: '0.8em', outline: 'none'}}
+                  placeholder="Поиск группы…"
+                  value={c2TreeSearch}
+                  onChange={e => setC2TreeSearch(e.target.value)}
+                />
               </div>
 
+              {c2TreeSearch.length >= 2 ? (
+                <div style={{overflowY: 'auto', flex: 1, padding: '4px 4px'}}>
+                  {c2TreeSearchResults.length === 0
+                    ? <div style={{padding: '16px 8px', color: '#334155', fontSize: '0.8em', textAlign: 'center'}}>Не найдено</div>
+                    : c2TreeSearchResults.map((r, idx) => (
+                        <div key={idx}
+                          onClick={() => { setC2Path(r.path); setC2TreeSearch(''); }}
+                          style={{padding: '5px 8px', borderRadius: 5, cursor: 'pointer', marginBottom: 1, background: c2Path === r.path ? '#1d4ed8' : 'transparent', fontSize: '0.78em'}}
+                        >
+                          <div style={{color: c2Path === r.path ? '#fff' : '#e2e8f0', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={r.path}>
+                            {'·'.repeat(r.depth + 1)} {r.name}
+                          </div>
+                          <div style={{color: '#334155', fontSize: '0.85em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                            {r.path} · {r.item_count.toLocaleString('ru-RU')} тов.
+                          </div>
+                        </div>
+                      ))
+                  }
+                </div>
+              ) : (
               <div style={{overflowY: 'auto', flex: 1, padding: '6px 4px'}}>
                 {/* All items root */}
                 <div
@@ -2044,6 +2069,7 @@ export function App() {
                   </div>
                 ))}
               </div>
+              )}
             </div>
 
             {/* Right: product list */}
@@ -2085,81 +2111,12 @@ export function App() {
                   </span>
                 </div>
                 <div style={{display: 'flex', gap: 6, alignItems: 'center'}}>
-                  <div style={{flex: 1, position: 'relative'}}>
-                    <input
-                      style={{
-                        width: '100%', boxSizing: 'border-box',
-                        background: '#1e293b', border: '1px solid #334155', borderRadius: 7,
-                        color: '#f1f5f9', padding: '6px 12px', fontSize: '0.84em',
-                        outline: 'none',
-                      }}
-                      placeholder="Поиск товаров, групп, кода, штрихкода…"
-                      value={c2Search}
-                      onChange={e => { setC2Search(e.target.value); }}
-                      onFocus={() => setC2SearchFocused(true)}
-                      onBlur={() => setTimeout(() => setC2SearchFocused(false), 160)}
-                    />
-                    {/* Smart dropdown */}
-                    {c2SearchFocused && c2Search.length >= 2 && (c2SearchGroupHits.length > 0 || c2Items.length > 0) && (
-                      <div style={{
-                        position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 200,
-                        background: '#1e293b', borderRadius: 8, border: '1px solid #334155',
-                        boxShadow: '0 8px 32px rgba(0,0,0,.5)', maxHeight: 340, overflowY: 'auto',
-                      }}>
-                        {/* Groups section */}
-                        {c2SearchGroupHits.length > 0 && (
-                          <>
-                            <div style={{padding: '7px 12px 3px', color: '#475569', fontSize: '0.66em', fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase'}}>Группы</div>
-                            {c2SearchGroupHits.map((g, i) => (
-                              <div key={i}
-                                onMouseDown={() => { setC2Path(g.path); setC2Search(''); setC2SearchFocused(false); }}
-                                style={{padding: '7px 12px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8}}
-                                onMouseEnter={e => (e.currentTarget.style.background = '#334155')}
-                                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                              >
-                                <div style={{minWidth: 0}}>
-                                  <div style={{color: '#e2e8f0', fontSize: '0.84em', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{g.name}</div>
-                                  <div style={{color: '#334155', fontSize: '0.71em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{g.path}</div>
-                                </div>
-                                <span style={{color: '#475569', fontSize: '0.74em', flexShrink: 0}}>{g.item_count.toLocaleString('ru-RU')} тов.</span>
-                              </div>
-                            ))}
-                          </>
-                        )}
-                        {/* Items section */}
-                        {c2Items.length > 0 && (
-                          <>
-                            {c2SearchGroupHits.length > 0 && <div style={{borderTop: '1px solid #0f172a', margin: '2px 0'}}/>}
-                            <div style={{padding: '7px 12px 3px', color: '#475569', fontSize: '0.66em', fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase'}}>Товары</div>
-                            {c2Items.slice(0, 5).map(item => (
-                              <div key={item.id}
-                                onMouseDown={() => { setC2Modal(item); setC2SearchFocused(false); }}
-                                style={{padding: '7px 12px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8}}
-                                onMouseEnter={e => (e.currentTarget.style.background = '#334155')}
-                                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                              >
-                                <div style={{flex: 1, minWidth: 0}}>
-                                  <div style={{color: '#e2e8f0', fontSize: '0.84em', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.item_name}</div>
-                                  <div style={{color: '#334155', fontSize: '0.71em'}}>
-                                    {item.item_code?.trim()}{item.parent_name ? ` · ${item.parent_name}` : ''}
-                                  </div>
-                                </div>
-                                <div style={{display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0}}>
-                                  {item.abc_class && <ClassBadge abc={item.abc_class} xyz={item.xyz_class || ''}/>}
-                                  <span style={{color: item.qty > 0 ? '#22c55e' : '#334155', fontSize: '0.78em'}}>{item.qty > 0 ? `${item.qty} шт.` : '—'}</span>
-                                </div>
-                              </div>
-                            ))}
-                            {c2Total > 5 && (
-                              <div style={{padding: '5px 12px 8px', color: '#334155', fontSize: '0.74em', textAlign: 'center'}}>
-                                ↓ ещё {(c2Total - 5).toLocaleString('ru-RU')} товаров в таблице
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                  <input
+                    style={{flex: 1, boxSizing: 'border-box', background: '#1e293b', border: '1px solid #334155', borderRadius: 7, color: '#f1f5f9', padding: '6px 12px', fontSize: '0.84em', outline: 'none'}}
+                    placeholder="Поиск по названию, коду, штрихкоду…"
+                    value={c2Search}
+                    onChange={e => setC2Search(e.target.value)}
+                  />
                   <label style={{display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, cursor: 'pointer', userSelect: 'none'}}>
                     <input
                       type="checkbox"

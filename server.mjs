@@ -13,6 +13,10 @@ try {
     CREATE INDEX IF NOT EXISTS idx_cp_item_code ON catalog_products(item_code);
   `);
 } catch (_e) { /* tables may not exist yet */ }
+
+// Register JS toLowerCase so SQLite can do case-insensitive Cyrillic search
+db.function('jslower', (s) => (s == null ? null : String(s).toLowerCase()));
+
 const app = express();
 
 app.use((req, res, next) => {
@@ -607,8 +611,16 @@ app.get('/api/catalog2/items', (req, res) => {
       params.push(...pp);
     }
     if (q) {
-      conditions.push(`(cp.item_name LIKE ? OR cp.item_code LIKE ? OR cp.barcode = ?)`);
-      params.push(`%${q}%`, `%${q}%`, q);
+      const words = q.toLowerCase().trim().split(/\s+/).filter(Boolean);
+      if (words.length === 1) {
+        const pat = `%${words[0]}%`;
+        conditions.push(`(jslower(cp.item_name) LIKE ? OR jslower(cp.item_code) LIKE ? OR cp.barcode = ?)`);
+        params.push(pat, pat, q);
+      } else {
+        const nameConds = words.map(() => `jslower(cp.item_name) LIKE ?`).join(' AND ');
+        conditions.push(`((${nameConds}) OR jslower(cp.item_code) LIKE ? OR cp.barcode = ?)`);
+        params.push(...words.map(w => `%${w}%`), `%${words.join('%')}%`, q);
+      }
     }
     if (req.query.has_stock === '1') {
       conditions.push('cp.qty > 0');
@@ -651,20 +663,21 @@ app.get('/api/catalog2/search-groups', (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     if (!q || q.length < 2) return res.json([]);
-    const pattern = `%${q}%`;
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     const results = [];
 
     for (let level = 0; level <= 8 && results.length < 25; level++) {
       const col = `group_l${level}`;
       const selectCols = Array.from({length: level + 1}, (_, i) => `group_l${i}`).join(', ');
+      const wordConds = words.map(() => `jslower(${col}) LIKE ?`).join(' AND ');
       const rows = db.prepare(`
         SELECT ${selectCols}, COUNT(*) AS item_count
         FROM catalog_products
-        WHERE ${col} LIKE ? AND ${col} IS NOT NULL
+        WHERE (${wordConds}) AND ${col} IS NOT NULL
         GROUP BY ${selectCols}
         ORDER BY item_count DESC
         LIMIT 6
-      `).all(pattern);
+      `).all(...words.map(w => `%${w}%`));
 
       for (const row of rows) {
         const pathParts = Array.from({length: level + 1}, (_, i) => row[`group_l${i}`]).filter(Boolean);
