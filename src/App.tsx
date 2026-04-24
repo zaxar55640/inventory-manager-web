@@ -68,7 +68,9 @@ type Catalog2Item = {
   group_l3: string|null; group_l4: string|null; group_l5: string|null;
   group_l6: string|null; group_l7: string|null; group_l8: string|null;
   group_depth: number; group_full_path: string|null;
+  last_sale_date: string|null; days_since_last_sale: number|null;
 };
+type C2GroupResult = {name: string; depth: number; item_count: number; path: string};
 type C2TreeNode = {name: string; item_count: number};
 type C2TreeEntry = {children: C2TreeNode[]; directItems: number};
 type C2Gran = 'day' | 'week' | 'month';
@@ -173,6 +175,12 @@ function fmtPeriod(period: string | undefined | null, gran: C2Gran): string {
 }
 
 function SalesLineChart({series, gran}: {series: C2SalesSeries[]; gran: C2Gran}) {
+  const [zoomRange, setZoomRange] = useState<[number,number] | null>(null);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [dragStart, setDragStart] = useState<number | null>(null);
+  const [dragCur, setDragCur] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+
   if (!series.length) {
     return (
       <div style={{textAlign: 'center', color: '#475569', padding: '36px 0', fontSize: '0.88em'}}>
@@ -181,104 +189,220 @@ function SalesLineChart({series, gran}: {series: C2SalesSeries[]; gran: C2Gran})
     );
   }
 
-  const W = 640, H = 210, PL = 42, PR = 16, PT = 24, PB = 38;
+  const W = 640, H = 210, PL = 52, PR = 16, PT = 28, PB = 38;
   const pw = W - PL - PR, ph = H - PT - PB;
-  const n = series.length;
 
-  const maxSales = Math.max(...series.map(s => s.sales), 1);
-  const maxRet   = Math.max(...series.map(s => s.returns), 0);
+  const displayed = zoomRange ? series.slice(zoomRange[0], zoomRange[1] + 1) : series;
+  const zoomOffset = zoomRange ? zoomRange[0] : 0;
+  const n = displayed.length;
+
+  const maxSales = Math.max(...displayed.map(s => s.sales), 1);
+  const maxRet   = Math.max(...displayed.map(s => s.returns), 0);
   const maxY = Math.max(maxSales, maxRet, 1);
 
-  const xOf = (i: number) => PL + (n === 1 ? pw / 2 : (i / (n - 1)) * pw);
+  const xOf = (i: number) => PL + (n <= 1 ? pw / 2 : (i / (n - 1)) * pw);
   const yOf = (v: number) => PT + ph - Math.max(0, Math.min(1, v / maxY)) * ph;
 
-  const salesPts  = series.map((s, i) => `${xOf(i).toFixed(1)},${yOf(s.sales).toFixed(1)}`).join(' ');
-  const retPts    = series.map((s, i) => `${xOf(i).toFixed(1)},${yOf(s.returns).toFixed(1)}`).join(' ');
+  function clientToDisplayIdx(clientX: number): number {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect || n <= 1) return 0;
+    const svgX = (clientX - rect.left) / rect.width * W;
+    const frac = Math.max(0, Math.min(1, (svgX - PL) / pw));
+    return Math.round(frac * (n - 1));
+  }
+
+  function onMouseMove(e: React.MouseEvent<SVGSVGElement>) {
+    const idx = clientToDisplayIdx(e.clientX);
+    setHoverIdx(idx);
+    if (dragStart !== null) setDragCur(idx);
+  }
+
+  function onMouseDown(e: React.MouseEvent<SVGSVGElement>) {
+    e.preventDefault();
+    const idx = clientToDisplayIdx(e.clientX);
+    setDragStart(idx);
+    setDragCur(idx);
+  }
+
+  function onMouseUp() {
+    if (dragStart !== null && dragCur !== null) {
+      const a = Math.min(dragStart, dragCur);
+      const b = Math.max(dragStart, dragCur);
+      if (b - a >= 2) {
+        setZoomRange([zoomOffset + a, zoomOffset + b]);
+        setHoverIdx(null);
+      }
+    }
+    setDragStart(null);
+    setDragCur(null);
+  }
+
+  function onMouseLeave() {
+    setHoverIdx(null);
+    setDragStart(null);
+    setDragCur(null);
+  }
+
+  const salesPts = displayed.map((s, i) => `${xOf(i).toFixed(1)},${yOf(s.sales).toFixed(1)}`).join(' ');
+  const retPts   = displayed.map((s, i) => `${xOf(i).toFixed(1)},${yOf(s.returns).toFixed(1)}`).join(' ');
   const salesArea = [
     `M ${xOf(0).toFixed(1)},${(PT + ph).toFixed(1)}`,
-    ...series.map((s, i) => `L ${xOf(i).toFixed(1)},${yOf(s.sales).toFixed(1)}`),
+    ...displayed.map((s, i) => `L ${xOf(i).toFixed(1)},${yOf(s.sales).toFixed(1)}`),
     `L ${xOf(n - 1).toFixed(1)},${(PT + ph).toFixed(1)} Z`,
   ].join(' ');
 
-  // X-axis label density
   const labelStep = n <= 14 ? 1 : n <= 31 ? 2 : n <= 60 ? 5 : n <= 90 ? 7 : n <= 180 ? 14 : n <= 365 ? 30 : 52;
-  // Y-axis ticks
   const yTicks = [0, 0.25, 0.5, 0.75, 1];
-  // Show dots only for small datasets
-  const showDots = n <= 90;
+  const showDots = n <= 60;
+
+  const hoverItem = hoverIdx !== null ? displayed[hoverIdx] : null;
+  const hoverX = hoverIdx !== null ? xOf(hoverIdx) : null;
+  const tooltipLeft = hoverX !== null && hoverX > W - 140;
+
+  const dragA = dragStart !== null && dragCur !== null ? Math.min(dragStart, dragCur) : null;
+  const dragB = dragStart !== null && dragCur !== null ? Math.max(dragStart, dragCur) : null;
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{width: '100%', height: 'auto', display: 'block'}}>
-      <defs>
-        <linearGradient id="c2sg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"   stopColor="#3b82f6" stopOpacity={0.35}/>
-          <stop offset="100%" stopColor="#3b82f6" stopOpacity={0}/>
-        </linearGradient>
-      </defs>
+    <div style={{position: 'relative', userSelect: 'none'}}>
+      {zoomRange && (
+        <button
+          onClick={() => { setZoomRange(null); setHoverIdx(null); }}
+          style={{
+            position: 'absolute', top: 0, right: 0, padding: '2px 8px',
+            background: '#334155', border: 'none', borderRadius: 4, color: '#94a3b8',
+            cursor: 'pointer', fontSize: '0.72em', zIndex: 10,
+          }}
+        >↔ Сброс зума</button>
+      )}
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        style={{width: '100%', height: 'auto', display: 'block', cursor: dragStart !== null ? 'col-resize' : 'crosshair'}}
+        onMouseMove={onMouseMove}
+        onMouseDown={onMouseDown}
+        onMouseUp={onMouseUp}
+        onMouseLeave={onMouseLeave}
+      >
+        <defs>
+          <linearGradient id="c2sg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor="#3b82f6" stopOpacity={0.28}/>
+            <stop offset="100%" stopColor="#3b82f6" stopOpacity={0}/>
+          </linearGradient>
+        </defs>
 
-      {/* Y grid */}
-      {yTicks.map(t => {
-        const y = PT + ph * (1 - t);
-        return (
-          <g key={t}>
-            <line x1={PL} y1={y} x2={W - PR} y2={y} stroke={t === 0 ? '#334155' : '#1e293b'} strokeWidth={t === 0 ? 1 : 0.6}/>
-            <text x={PL - 5} y={y + 3.5} fontSize={8.5} textAnchor="end" fill="#475569">
-              {Math.round(maxY * t)}
-            </text>
+        {/* Y grid */}
+        {yTicks.map(t => {
+          const y = PT + ph * (1 - t);
+          return (
+            <g key={t}>
+              <line x1={PL} y1={y} x2={W - PR} y2={y} stroke={t === 0 ? '#334155' : '#1e293b'} strokeWidth={t === 0 ? 1 : 0.6}/>
+              <text x={PL - 5} y={y + 3.5} fontSize={8.5} textAnchor="end" fill="#475569">
+                {Math.round(maxY * t)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Drag selection highlight */}
+        {dragA !== null && dragB !== null && dragA !== dragB && (
+          <rect
+            x={xOf(dragA)} y={PT}
+            width={Math.max(0, xOf(dragB) - xOf(dragA))} height={ph}
+            fill="rgba(59,130,246,0.1)" stroke="rgba(59,130,246,0.35)" strokeWidth={0.8}
+          />
+        )}
+
+        {/* Area fill */}
+        <path d={salesArea} fill="url(#c2sg)"/>
+
+        {/* Returns line */}
+        {maxRet > 0 && (
+          <polyline points={retPts} fill="none" stroke="#ef4444" strokeWidth={1.5}
+            strokeLinejoin="round" strokeLinecap="round" strokeDasharray="4 2"/>
+        )}
+
+        {/* Sales line */}
+        <polyline points={salesPts} fill="none" stroke="#3b82f6" strokeWidth={2}
+          strokeLinejoin="round" strokeLinecap="round"/>
+
+        {/* Dots */}
+        {showDots && displayed.map((s, i) => (
+          <g key={i}>
+            <circle
+              cx={xOf(i)} cy={yOf(s.sales)}
+              r={hoverIdx === i ? 4.5 : (n <= 30 ? 2.5 : 1.8)}
+              fill={hoverIdx === i ? '#93c5fd' : '#3b82f6'}
+              stroke="#0f172a" strokeWidth={1}
+            />
+            {s.returns > 0 && (
+              <circle
+                cx={xOf(i)} cy={yOf(s.returns)}
+                r={hoverIdx === i ? 3.5 : 2}
+                fill={hoverIdx === i ? '#fca5a5' : '#ef4444'}
+                stroke="#0f172a" strokeWidth={1}
+              />
+            )}
           </g>
-        );
-      })}
+        ))}
 
-      {/* Area fill */}
-      <path d={salesArea} fill="url(#c2sg)"/>
+        {/* X labels */}
+        {displayed.map((s, i) => {
+          if (i % labelStep !== 0 && i !== n - 1) return null;
+          if (i === n - 1 && n > 1 && (n - 1) % labelStep < labelStep * 0.5) return null;
+          return (
+            <text key={i} x={xOf(i)} y={H - 4} fontSize={8} textAnchor="middle" fill="#475569">
+              {fmtPeriod(s.period, gran)}
+            </text>
+          );
+        })}
 
-      {/* Returns line */}
-      {maxRet > 0 && (
-        <polyline points={retPts} fill="none" stroke="#ef4444" strokeWidth={1.5}
-          strokeLinejoin="round" strokeLinecap="round" strokeDasharray="4 2"/>
-      )}
+        {/* Hover crosshair + tooltip */}
+        {hoverIdx !== null && hoverX !== null && hoverItem && (
+          <>
+            <line x1={hoverX} y1={PT} x2={hoverX} y2={PT + ph}
+              stroke="#475569" strokeWidth={0.8} strokeDasharray="3 2"/>
+            {(() => {
+              const tW = 126, tH = maxRet > 0 ? 52 : 38;
+              const tX = tooltipLeft ? hoverX - tW - 8 : hoverX + 8;
+              const tY = Math.max(PT, Math.min(PT + ph - tH, yOf(hoverItem.sales) - tH / 2));
+              return (
+                <g>
+                  <rect x={tX} y={tY} width={tW} height={tH} rx={4}
+                    fill="#1e293b" stroke="#334155" strokeWidth={0.8}/>
+                  <text x={tX + 8} y={tY + 13} fontSize={8.5} fill="#64748b">
+                    {fmtPeriod(hoverItem.period, gran)}
+                  </text>
+                  <text x={tX + 8} y={tY + 27} fontSize={10} fill="#93c5fd" fontWeight="bold">
+                    {hoverItem.sales.toLocaleString('ru-RU')} прод.
+                  </text>
+                  {maxRet > 0 && (
+                    <text x={tX + 8} y={tY + 42} fontSize={9} fill="#fca5a5">
+                      {hoverItem.returns.toLocaleString('ru-RU')} возвр.
+                    </text>
+                  )}
+                </g>
+              );
+            })()}
+          </>
+        )}
 
-      {/* Sales line */}
-      <polyline points={salesPts} fill="none" stroke="#3b82f6" strokeWidth={2.2}
-        strokeLinejoin="round" strokeLinecap="round"/>
-
-      {/* Dots */}
-      {showDots && series.map((s, i) => (
-        <g key={i}>
-          <circle cx={xOf(i)} cy={yOf(s.sales)} r={n <= 30 ? 3 : 2} fill="#3b82f6" stroke="#0f172a" strokeWidth={1}>
-            <title>{s.period}: {s.sales} прод.</title>
-          </circle>
-          {s.returns > 0 && (
-            <circle cx={xOf(i)} cy={yOf(s.returns)} r={2} fill="#ef4444" stroke="#0f172a" strokeWidth={1}>
-              <title>{s.period}: {s.returns} возвр.</title>
-            </circle>
-          )}
-        </g>
-      ))}
-
-      {/* X labels */}
-      {series.map((s, i) => {
-        if (i % labelStep !== 0 && i !== n - 1) return null;
-        // avoid overlap at end
-        if (i === n - 1 && n > 1 && (n - 1) % labelStep < labelStep * 0.5) return null;
-        return (
-          <text key={i} x={xOf(i)} y={H - 4} fontSize={8} textAnchor="middle" fill="#475569">
-            {fmtPeriod(s.period, gran)}
+        {/* Legend */}
+        <line x1={PL} y1={10} x2={PL + 16} y2={10} stroke="#3b82f6" strokeWidth={2}/>
+        <circle cx={PL + 8} cy={10} r={2} fill="#3b82f6"/>
+        <text x={PL + 20} y={13.5} fontSize={9} fill="#94a3b8">Продажи</text>
+        {maxRet > 0 && (
+          <>
+            <line x1={PL + 68} y1={10} x2={PL + 84} y2={10} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 2"/>
+            <text x={PL + 88} y={13.5} fontSize={9} fill="#94a3b8">Возвраты</text>
+          </>
+        )}
+        {!zoomRange && n > 8 && (
+          <text x={W - PR} y={13.5} fontSize={7} textAnchor="end" fill="#1e293b">
+            выделите мышью для зума
           </text>
-        );
-      })}
-
-      {/* Legend */}
-      <line x1={PL} y1={8} x2={PL + 18} y2={8} stroke="#3b82f6" strokeWidth={2.2}/>
-      <circle cx={PL + 9} cy={8} r={2.5} fill="#3b82f6"/>
-      <text x={PL + 22} y={11.5} fontSize={9} fill="#94a3b8">Продажи</text>
-      {maxRet > 0 && (
-        <>
-          <line x1={PL + 72} y1={8} x2={PL + 90} y2={8} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 2"/>
-          <text x={PL + 94} y={11.5} fontSize={9} fill="#94a3b8">Возвраты</text>
-        </>
-      )}
-    </svg>
+        )}
+      </svg>
+    </div>
   );
 }
 
@@ -674,6 +798,10 @@ export function App() {
   const [c2ChartFrom, setC2ChartFrom] = useState('2024-01');
   const [c2ChartTo, setC2ChartTo] = useState(() => new Date().toISOString().slice(0, 7));
   const [c2ChartGran, setC2ChartGran] = useState<C2Gran>('month');
+  const [c2SortBy, setC2SortBy] = useState('item_name');
+  const [c2SortDir, setC2SortDir] = useState<'asc'|'desc'>('asc');
+  const [c2TreeSearch, setC2TreeSearch] = useState('');
+  const [c2TreeSearchResults, setC2TreeSearchResults] = useState<C2GroupResult[]>([]);
 
   // ── api helpers ─────────────────────────────────────────────────────────────
 
@@ -727,12 +855,14 @@ export function App() {
     } catch (err) { console.error('c2LoadChildren', err); }
   }
 
-  async function c2LoadItems(path: string, q: string, offset: number) {
+  async function c2LoadItems(path: string, q: string, offset: number, sortBy = c2SortBy, sortDir = c2SortDir) {
     const params = new URLSearchParams();
     if (path) params.set('path', path);
     if (q.trim()) params.set('q', q.trim());
     params.set('limit', '50');
     params.set('offset', String(offset));
+    params.set('sort_by', sortBy);
+    params.set('sort_dir', sortDir);
     setC2Loading(true);
     try {
       const data = await fetchJSON<Catalog2Response>(apiUrl(`/api/catalog2/items?${params}`));
@@ -744,6 +874,14 @@ export function App() {
       console.error('c2LoadItems', err);
       setC2Items([]); setC2Total(0); setC2HasMore(false);
     } finally { setC2Loading(false); }
+  }
+
+  async function c2SearchGroups(q: string) {
+    if (q.length < 2) { setC2TreeSearchResults([]); return; }
+    try {
+      const data = await fetchJSON<C2GroupResult[]>(apiUrl(`/api/catalog2/search-groups?q=${encodeURIComponent(q)}`));
+      setC2TreeSearchResults(data);
+    } catch { setC2TreeSearchResults([]); }
   }
 
   async function c2LoadSales(code: string, from: string, to: string, gran: C2Gran) {
@@ -888,7 +1026,12 @@ export function App() {
     if (tab !== 'catalog2') return;
     const t = setTimeout(() => { setC2Offset(0); c2LoadItems(c2Path, c2Search, 0); }, 300);
     return () => clearTimeout(t);
-  }, [c2Path, c2Search]);
+  }, [c2Path, c2Search, c2SortBy, c2SortDir]);
+
+  useEffect(() => {
+    const t = setTimeout(() => c2SearchGroups(c2TreeSearch), 300);
+    return () => clearTimeout(t);
+  }, [c2TreeSearch]);
 
   useEffect(() => {
     if (!c2Modal) return;
@@ -1588,9 +1731,46 @@ export function App() {
               background: '#0a1628', borderRight: c2TreeOpen ? '1px solid #1e293b' : 'none',
               overflow: 'hidden', transition: 'width .22s ease',
             }}>
-              <div style={{padding: '12px 12px 8px', borderBottom: '1px solid #1e293b', flexShrink: 0}}>
-                <div style={{fontSize: '0.68em', color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700}}>Группы товаров</div>
+              <div style={{padding: '10px 10px 8px', borderBottom: '1px solid #1e293b', flexShrink: 0}}>
+                <div style={{fontSize: '0.68em', color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, marginBottom: 6}}>Группы товаров</div>
+                <input
+                  style={{
+                    width: '100%', boxSizing: 'border-box',
+                    background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6,
+                    color: '#f1f5f9', padding: '4px 8px', fontSize: '0.8em', outline: 'none',
+                  }}
+                  placeholder="Поиск группы…"
+                  value={c2TreeSearch}
+                  onChange={e => setC2TreeSearch(e.target.value)}
+                />
               </div>
+
+              {/* Search results mode */}
+              {c2TreeSearch.length >= 2 ? (
+                <div style={{overflowY: 'auto', flex: 1, padding: '4px 4px'}}>
+                  {c2TreeSearchResults.length === 0 && (
+                    <div style={{padding: '16px 8px', color: '#334155', fontSize: '0.8em', textAlign: 'center'}}>Не найдено</div>
+                  )}
+                  {c2TreeSearchResults.map((r, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => { setC2Path(r.path); setC2TreeSearch(''); }}
+                      style={{
+                        padding: '5px 8px', borderRadius: 5, cursor: 'pointer', marginBottom: 1,
+                        background: c2Path === r.path ? '#1d4ed8' : 'transparent',
+                        fontSize: '0.78em',
+                      }}
+                    >
+                      <div style={{color: c2Path === r.path ? '#fff' : '#e2e8f0', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={r.path}>
+                        {'·'.repeat(r.depth + 1)} {r.name}
+                      </div>
+                      <div style={{color: '#334155', fontSize: '0.85em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={r.path}>
+                        {r.path} · {r.item_count.toLocaleString('ru-RU')} тов.
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
               <div style={{overflowY: 'auto', flex: 1, padding: '6px 4px'}}>
                 {/* All items root */}
                 <div
@@ -1635,6 +1815,7 @@ export function App() {
                   </div>
                 ))}
               </div>
+              )}
             </div>
 
             {/* Right: product list */}
@@ -1698,48 +1879,91 @@ export function App() {
                 <table style={{width: '100%', borderCollapse: 'collapse', fontSize: '0.83em'}}>
                   <thead>
                     <tr style={{background: '#0a1628', position: 'sticky', top: 0, zIndex: 4}}>
-                      {(['Название', 'Код / ШК', 'Подгруппа', 'Остаток', 'Цена прод.', 'Цена закуп.'] as string[]).map((h, i) => (
-                        <th key={h} style={{
-                          padding: '7px 10px', textAlign: i >= 3 ? 'right' : 'left',
-                          color: '#475569', fontWeight: 600, fontSize: '0.8em',
-                          borderBottom: '1px solid #1e293b', whiteSpace: 'nowrap',
-                        }}>{h}</th>
-                      ))}
+                      {([
+                        {label: 'Название', key: 'item_name', right: false},
+                        {label: 'Код / ШК', key: null, right: false},
+                        {label: 'Подгруппа', key: 'parent_name', right: false},
+                        {label: 'Остаток', key: 'qty', right: true},
+                        {label: 'Цена прод.', key: 'retail_price', right: true},
+                        {label: 'Цена закуп.', key: 'purchase_price', right: true},
+                        {label: 'Посл. продажа', key: 'last_sale_date', right: true},
+                      ] as {label:string; key:string|null; right:boolean}[]).map(col => {
+                        const active = col.key && c2SortBy === col.key;
+                        return (
+                          <th
+                            key={col.label}
+                            onClick={col.key ? () => {
+                              if (c2SortBy === col.key) setC2SortDir(d => d === 'asc' ? 'desc' : 'asc');
+                              else { setC2SortBy(col.key!); setC2SortDir('asc'); }
+                              setC2Offset(0);
+                            } : undefined}
+                            style={{
+                              padding: '7px 10px', textAlign: col.right ? 'right' : 'left',
+                              color: active ? '#60a5fa' : '#475569',
+                              fontWeight: 600, fontSize: '0.8em',
+                              borderBottom: '1px solid #1e293b', whiteSpace: 'nowrap',
+                              cursor: col.key ? 'pointer' : 'default',
+                              userSelect: 'none',
+                            }}
+                          >
+                            {col.label}{col.key ? (active ? (c2SortDir === 'asc' ? ' ↑' : ' ↓') : ' ↕') : ''}
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>
-                    {c2Items.map(item => (
-                      <tr
-                        key={item.id}
-                        onClick={() => setC2Modal(item)}
-                        style={{cursor: 'pointer', borderBottom: '1px solid #0f172a', transition: 'background .1s'}}
-                        onMouseEnter={e => ((e.currentTarget as HTMLElement).style.background = '#1e293b')}
-                        onMouseLeave={e => ((e.currentTarget as HTMLElement).style.background = '')}
-                      >
-                        <td style={{padding: '7px 10px', maxWidth: 340, color: '#e2e8f0'}}>
-                          <div style={{fontWeight: 500, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.item_name}</div>
-                        </td>
-                        <td style={{padding: '7px 10px', fontFamily: 'monospace', color: '#475569', fontSize: '0.85em', whiteSpace: 'nowrap'}}>
-                          {item.item_code?.trim() && <div>{item.item_code.trim()}</div>}
-                          {item.barcode && <div style={{color: '#334155'}}>{item.barcode}</div>}
-                        </td>
-                        <td style={{padding: '7px 10px', color: '#64748b', whiteSpace: 'nowrap', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis'}}>
-                          {item.parent_name || '—'}
-                        </td>
-                        <td style={{padding: '7px 10px', textAlign: 'right', fontWeight: 600, color: item.qty > 0 ? '#22c55e' : '#334155'}}>
-                          {item.qty > 0 ? item.qty.toLocaleString('ru-RU') : '—'}
-                        </td>
-                        <td style={{padding: '7px 10px', textAlign: 'right', color: '#e2e8f0'}}>
-                          {item.retail_price > 0 ? item.retail_price.toLocaleString('ru-RU') + ' ₽' : '—'}
-                        </td>
-                        <td style={{padding: '7px 10px', textAlign: 'right', color: '#64748b'}}>
-                          {item.purchase_price > 0 ? item.purchase_price.toLocaleString('ru-RU') + ' ₽' : '—'}
-                        </td>
-                      </tr>
-                    ))}
+                    {c2Items.map(item => {
+                      const days = item.days_since_last_sale;
+                      const rowBase = days === null ? 'rgba(239,68,68,.09)'
+                        : days >= 365 ? 'rgba(239,68,68,.09)'
+                        : days >= 120 ? 'rgba(234,179,8,.07)'
+                        : undefined;
+                      return (
+                        <tr
+                          key={item.id}
+                          onClick={() => setC2Modal(item)}
+                          style={{cursor: 'pointer', borderBottom: '1px solid #0f172a', background: rowBase, transition: 'background .1s'}}
+                          onMouseEnter={e => ((e.currentTarget as HTMLElement).style.background = '#1e293b')}
+                          onMouseLeave={e => ((e.currentTarget as HTMLElement).style.background = rowBase || '')}
+                        >
+                          <td style={{padding: '7px 10px', maxWidth: 300, color: '#e2e8f0'}}>
+                            <div style={{fontWeight: 500, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.item_name}</div>
+                          </td>
+                          <td style={{padding: '7px 10px', fontFamily: 'monospace', color: '#475569', fontSize: '0.85em', whiteSpace: 'nowrap'}}>
+                            {item.item_code?.trim() && <div>{item.item_code.trim()}</div>}
+                            {item.barcode && <div style={{color: '#334155'}}>{item.barcode}</div>}
+                          </td>
+                          <td style={{padding: '7px 10px', color: '#64748b', whiteSpace: 'nowrap', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis'}}>
+                            {item.parent_name || '—'}
+                          </td>
+                          <td style={{padding: '7px 10px', textAlign: 'right', fontWeight: 600, color: item.qty > 0 ? '#22c55e' : '#334155'}}>
+                            {item.qty > 0 ? item.qty.toLocaleString('ru-RU') : '—'}
+                          </td>
+                          <td style={{padding: '7px 10px', textAlign: 'right', color: '#e2e8f0'}}>
+                            {item.retail_price > 0 ? item.retail_price.toLocaleString('ru-RU') + ' ₽' : '—'}
+                          </td>
+                          <td style={{padding: '7px 10px', textAlign: 'right', color: '#64748b'}}>
+                            {item.purchase_price > 0 ? item.purchase_price.toLocaleString('ru-RU') + ' ₽' : '—'}
+                          </td>
+                          <td style={{padding: '7px 10px', textAlign: 'right', whiteSpace: 'nowrap'}}>
+                            {item.last_sale_date
+                              ? <div>
+                                  <div style={{color: '#94a3b8', fontSize: '0.9em'}}>{new Date(item.last_sale_date).toLocaleDateString('ru-RU')}</div>
+                                  <div style={{
+                                    color: days !== null && days >= 365 ? '#f87171' : days !== null && days >= 120 ? '#fbbf24' : '#475569',
+                                    fontSize: '0.78em',
+                                  }}>{days} дн. назад</div>
+                                </div>
+                              : <span style={{color: '#ef4444', fontSize: '0.85em'}}>не было</span>
+                            }
+                          </td>
+                        </tr>
+                      );
+                    })}
                     {!c2Loading && !c2Items.length && (
                       <tr>
-                        <td colSpan={6} style={{padding: '40px 16px', textAlign: 'center', color: '#334155'}}>Товары не найдены</td>
+                        <td colSpan={7} style={{padding: '40px 16px', textAlign: 'center', color: '#334155'}}>Товары не найдены</td>
                       </tr>
                     )}
                   </tbody>

@@ -7,6 +7,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = process.env.INVENTORY_DB || path.resolve(__dirname, '../inventory_mvp/db/inventory_mvp.sqlite');
 const corsOrigin = process.env.CORS_ORIGIN || '*';
 const db = new Database(dbPath);
+try {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_cs_item_code_date ON catalog_sales(item_code, sale_date);
+    CREATE INDEX IF NOT EXISTS idx_cp_item_code ON catalog_products(item_code);
+  `);
+} catch (_e) { /* tables may not exist yet */ }
 const app = express();
 
 app.use((req, res, next) => {
@@ -584,7 +590,7 @@ app.get('/api/catalog2/items', (req, res) => {
     const sortBy  = String(req.query.sort_by  || 'item_name');
     const sortDir = req.query.sort_dir === 'desc' ? 'DESC' : 'ASC';
 
-    const allowedSort = new Set(['item_name','item_code','qty','retail_price','purchase_price','parent_name']);
+    const allowedSort = new Set(['item_name','item_code','qty','retail_price','purchase_price','parent_name','last_sale_date','days_since_last_sale']);
     const col = allowedSort.has(sortBy) ? sortBy : 'item_name';
 
     const conditions = [];
@@ -596,22 +602,29 @@ app.get('/api/catalog2/items', (req, res) => {
       params.push(...pp);
     }
     if (q) {
-      conditions.push(`(item_name LIKE ? OR item_code LIKE ? OR barcode = ?)`);
+      conditions.push(`(cp.item_name LIKE ? OR cp.item_code LIKE ? OR cp.barcode = ?)`);
       params.push(`%${q}%`, `%${q}%`, q);
     }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
-    const total = db.prepare(`SELECT COUNT(*) AS cnt FROM catalog_products ${where}`).get(...params).cnt;
+    const total = db.prepare(`SELECT COUNT(*) AS cnt FROM catalog_products cp ${where}`).get(...params).cnt;
     const items = db.prepare(`
-      SELECT id, item_code, item_name, barcode, qty, reserve,
-             retail_price, purchase_price, parent_name, variant,
-             group_l0, group_l1, group_l2, group_l3, group_l4,
-             group_l5, group_l6, group_l7, group_l8,
-             group_depth, group_full_path
-      FROM catalog_products
+      SELECT cp.id, cp.item_code, cp.item_name, cp.barcode, cp.qty, cp.reserve,
+             cp.retail_price, cp.purchase_price, cp.parent_name, cp.variant,
+             cp.group_l0, cp.group_l1, cp.group_l2, cp.group_l3, cp.group_l4,
+             cp.group_l5, cp.group_l6, cp.group_l7, cp.group_l8,
+             cp.group_depth, cp.group_full_path,
+             ls.last_sale_date,
+             CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) AS days_since_last_sale
+      FROM catalog_products cp
+      LEFT JOIN (
+        SELECT item_code, MAX(sale_date) AS last_sale_date
+        FROM catalog_sales
+        GROUP BY item_code
+      ) ls ON ls.item_code = cp.item_code
       ${where}
-      ORDER BY ${col} ${sortDir}
+      ORDER BY ${col} ${sortDir} NULLS LAST
       LIMIT ? OFFSET ?
     `).all(...params, limit, offset);
 
@@ -620,6 +633,37 @@ app.get('/api/catalog2/items', (req, res) => {
     console.error('/api/catalog2/items', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Search group names across all hierarchy levels
+app.get('/api/catalog2/search-groups', (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q || q.length < 2) return res.json([]);
+    const pattern = `%${q}%`;
+    const results = [];
+
+    for (let level = 0; level <= 8 && results.length < 25; level++) {
+      const col = `group_l${level}`;
+      const selectCols = Array.from({length: level + 1}, (_, i) => `group_l${i}`).join(', ');
+      const rows = db.prepare(`
+        SELECT ${selectCols}, COUNT(*) AS item_count
+        FROM catalog_products
+        WHERE ${col} LIKE ? AND ${col} IS NOT NULL
+        GROUP BY ${selectCols}
+        ORDER BY item_count DESC
+        LIMIT 6
+      `).all(pattern);
+
+      for (const row of rows) {
+        const pathParts = Array.from({length: level + 1}, (_, i) => row[`group_l${i}`]).filter(Boolean);
+        results.push({ name: row[col], depth: level, item_count: row.item_count, path: pathParts.join(' / ') });
+      }
+    }
+
+    results.sort((a, b) => b.item_count - a.item_count);
+    res.json(results.slice(0, 20));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Returns single product detail by id or item_code
