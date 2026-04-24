@@ -100,4 +100,77 @@ button, .tab, .step-card { touch-action: manipulation; }
   .search-item { padding: 12px; }
   .tab, .primary, .ghost-btn, .icon-btn, .danger-btn { min-height: 44px; }
   textarea { min-width: 0; width: 100%; }
+
+  .analytics-grid-4,
+  .analytics-grid-3,
+  .analytics-grid-2,
+  .analytics-split,
+  .analytics-problems {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+  }
+
+  .analytics-kpis {
+    gap: 10px !important;
+  }
+
+  .analytics-scope-switch {
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: 1fr;
+  }
+
+  .analytics-scope-switch button {
+    width: 100%;
+  }
+
+  .analytics-summary-card,
+  .analytics-problem-card,
+  .analytics-reco-card,
+  .analytics-matrix-card {
+    padding: 12px 14px !important;
+  }
+
+  .analytics-table-wrap {
+    overflow: visible !important;
+  }
+
+  .analytics-table {
+    min-width: 0 !important;
+    width: 100% !important;
+    border-collapse: separate !important;
+    border-spacing: 0 10px !important;
+  }
+
+  .analytics-table thead {
+    display: none;
+  }
+
+  .analytics-table tbody,
+  .analytics-table tr,
+  .analytics-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .analytics-table tr {
+    background: #111827;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 10px 12px;
+  }
+
+  .analytics-table td {
+    border-bottom: none;
+    padding: 6px 0 !important;
+  }
+
+  .analytics-mobile-label {
+    display: inline-block !important;
+    width: 112px;
+    color: var(--muted);
+    font-size: 12px;
+    margin-right: 8px;
+    vertical-align: top;
+  }
 }
