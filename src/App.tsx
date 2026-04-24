@@ -91,6 +91,8 @@ type C2Forecast = {
   lead_time_days: number; order_cycle_days: number;
   recommended_stock: number; to_order: number;
   demand_mode: string; total_net_sales_365: number;
+  anomaly_dates?: {sale_date: string; net_qty: number}[];
+  anomaly_threshold?: number;
 };
 type C2TreeNode = {name: string; item_count: number};
 type C2TreeEntry = {children: C2TreeNode[]; directItems: number};
@@ -493,6 +495,7 @@ function ProductDetailModal2({
   setChartFrom: (v: string) => void; setChartTo: (v: string) => void; setChartGran: (v: C2Gran) => void;
   forecastData: C2Forecast | null; forecastLoading: boolean;
 }) {
+  const [forecastDays, setForecastDays] = useState(forecastData?.order_cycle_days ?? 14);
   const profit = item.retail_price - item.purchase_price;
   const margin = item.retail_price > 0 ? (profit / item.retail_price * 100) : 0;
   const pathParts = item.group_full_path ? item.group_full_path.split(' / ') : [];
@@ -629,100 +632,154 @@ function ProductDetailModal2({
                 const f = forecastData;
                 const dm = DEMAND_MODE_LABELS[f.demand_mode] || {label: f.demand_mode, color: '#94a3b8'};
                 const coefs = Array.from({length: 12}, (_, i) => (f as any)[`month_coef_${i + 1}`] as number);
-                const fmtN = (v: number, d = 2) => v.toLocaleString('ru-RU', {minimumFractionDigits: d, maximumFractionDigits: d});
+                const r2 = (v: number) => Math.round(v * 100) / 100;
+                const fmt1 = (v: number) => v.toLocaleString('ru-RU', {minimumFractionDigits: 1, maximumFractionDigits: 1});
+
+                // Dynamic recalculation based on forecastDays
+                const dayRate = f.forecast_day_matrix;
+                const dynStock = dayRate * (f.lead_time_days + forecastDays / 2) + f.ss_total;
+                const dynOrder = Math.max(0, Math.ceil(dynStock - item.qty));
+
+                const wBaseDir = f.w_season > f.w_base ? '↑' : f.w_season < f.w_base ? '↓' : '=';
+                const wBaseDirColor = f.w_season > f.w_base ? '#22c55e' : f.w_season < f.w_base ? '#f59e0b' : '#64748b';
+
                 return (
                   <div style={{background: '#0f172a', borderRadius: 10, padding: '16px', marginTop: 14}}>
+
                     {/* Header */}
                     <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 6}}>
                       <span style={{fontWeight: 600, fontSize: '0.88em', color: '#f1f5f9'}}>
                         Прогноз закупки
-                        <span style={{fontSize: '0.82em', fontWeight: 400, color: '#475569', marginLeft: 8}}>{f.calc_date}</span>
+                        <span style={{fontSize: '0.78em', fontWeight: 400, color: '#475569', marginLeft: 8}}>{f.calc_date} · продаж за год: {Math.round(f.total_net_sales_365)} шт.</span>
                       </span>
                       <div style={{display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap'}}>
                         <ClassBadge abc={f.abc_class} xyz={f.xyz_class}/>
-                        <span style={{
-                          background: dm.color + '22', color: dm.color,
-                          borderRadius: 4, padding: '2px 7px', fontSize: '0.74em', fontWeight: 600,
-                          border: `1px solid ${dm.color}44`,
-                        }}>{dm.label}</span>
+                        <span style={{background: dm.color + '22', color: dm.color, borderRadius: 4, padding: '2px 7px', fontSize: '0.74em', fontWeight: 600, border: `1px solid ${dm.color}44`}}>{dm.label}</span>
+                      </div>
+                    </div>
+
+                    {/* Demand metrics: 4 cards */}
+                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginBottom: 10}}>
+                      {[
+                        {label: 'Ср. продажи', sub: 'в день (год)', val: `${fmt1(f.avg_day_365)} шт.`, color: '#94a3b8'},
+                        {label: 'Базовый', sub: 'в неделю (год)', val: `${fmt1(f.w_base)} шт.`, color: '#64748b'},
+                        {label: 'Сезонный', sub: `нед. ${new Date(f.calc_date).toLocaleDateString('ru-RU',{day:'numeric',month:'short'})}`, val: `${fmt1(f.w_season)} шт.`, color: wBaseDirColor},
+                        {label: 'Прогноз', sub: 'в неделю итого', val: `${fmt1(f.w_forecast_final)} шт.`, color: '#60a5fa'},
+                      ].map(c => (
+                        <div key={c.label} style={{background: '#0a1628', borderRadius: 8, padding: '9px 10px'}}>
+                          <div style={{fontSize: '0.68em', color: '#475569', marginBottom: 1}}>{c.label}</div>
+                          <div style={{fontSize: '0.62em', color: '#334155', marginBottom: 4}}>{c.sub}</div>
+                          <div style={{fontWeight: 700, color: c.color, fontSize: '0.9em'}}>{c.val}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Explanation of base vs seasonal */}
+                    <div style={{fontSize: '0.74em', color: '#475569', background: '#0a1628', borderRadius: 7, padding: '8px 10px', marginBottom: 14, lineHeight: 1.5}}>
+                      <span style={{color: '#334155'}}>Базовый</span> = средние продажи за последний год × 7 дней.{' '}
+                      <span style={{color: '#334155'}}>Сезонный</span> = фактические продажи на этой / следующей неделе в 2024–2025 гг.{' '}
+                      {f.w_season > f.w_base
+                        ? <span style={{color: '#22c55e'}}>Сейчас активнее среднего — сезон.</span>
+                        : f.w_season < f.w_base * 0.9
+                        ? <span style={{color: '#f59e0b'}}>Сейчас тише среднего — низкий сезон.</span>
+                        : <span style={{color: '#64748b'}}>Близко к среднему.</span>
+                      }
+                      {' '}Итог = 45% базовый + 55% сезонный{wBaseDir !== '=' && <span style={{color: wBaseDirColor}}> {wBaseDir}</span>}.
+                    </div>
+
+                    {/* Order horizon + recommendation */}
+                    <div style={{background: '#0a1628', borderRadius: 8, padding: '12px 14px', marginBottom: 14}}>
+                      <div style={{display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap'}}>
+                        <span style={{fontSize: '0.8em', color: '#64748b'}}>Закупить на</span>
+                        <input
+                          type="number" min={1} max={365}
+                          value={forecastDays}
+                          onChange={e => setForecastDays(Math.max(1, Math.min(365, Number(e.target.value) || 14)))}
+                          style={{width: 60, padding: '4px 8px', borderRadius: 6, border: '1px solid #334155', background: '#1e293b', color: '#f1f5f9', fontSize: '0.9em', textAlign: 'center'}}
+                        />
+                        <span style={{fontSize: '0.8em', color: '#64748b'}}>дней вперёд <span style={{color: '#1e293b'}}>(+ {f.lead_time_days} дн. доставки)</span></span>
+                      </div>
+                      <div style={{display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap'}}>
+                        <div>
+                          <div style={{fontSize: '0.68em', color: '#475569'}}>Нужно остатков</div>
+                          <div style={{fontWeight: 600, color: '#94a3b8'}}>{fmt1(dynStock)} шт.</div>
+                        </div>
+                        <div style={{color: '#1e293b', fontSize: '1.2em'}}>−</div>
+                        <div>
+                          <div style={{fontSize: '0.68em', color: '#475569'}}>Есть сейчас</div>
+                          <div style={{fontWeight: 600, color: '#64748b'}}>{item.qty.toLocaleString('ru-RU')} шт.</div>
+                        </div>
+                        <div style={{color: '#1e293b', fontSize: '1.2em'}}>+</div>
+                        <div>
+                          <div style={{fontSize: '0.68em', color: '#f59e0b'}}>Страховой запас</div>
+                          <div style={{fontWeight: 600, color: '#f59e0b'}}>{fmt1(f.ss_total)} шт.</div>
+                        </div>
+                        <div style={{flex: 1}}/>
+                        <div style={{textAlign: 'center', background: dynOrder > 0 ? '#052e16' : '#0f172a', borderRadius: 8, padding: '8px 16px', border: `1px solid ${dynOrder > 0 ? '#16a34a' : '#1e293b'}`}}>
+                          <div style={{fontSize: '0.68em', color: '#475569'}}>Заказать</div>
+                          <div style={{fontWeight: 800, fontSize: '1.7em', color: dynOrder > 0 ? '#22c55e' : '#334155', lineHeight: 1}}>{dynOrder}</div>
+                          <div style={{fontSize: '0.65em', color: '#475569'}}>шт.</div>
+                        </div>
                       </div>
                     </div>
 
                     {/* Seasonality */}
                     <div style={{marginBottom: 14}}>
-                      <div style={{fontSize: '0.76em', color: '#475569', marginBottom: 5}}>
+                      <div style={{fontSize: '0.76em', color: '#94a3b8', marginBottom: 5, fontWeight: 600}}>
                         Сезонность
                         {f.peak_months.length > 0
-                          ? <span style={{color: '#f59e0b', marginLeft: 6}}>
+                          ? <span style={{color: '#f59e0b', marginLeft: 6, fontWeight: 400}}>
                               пик: {f.peak_months.map(m => RU_MONTHS[m - 1]).join(', ')}
                             </span>
-                          : <span style={{color: '#334155', marginLeft: 6}}>пиков нет</span>
+                          : <span style={{color: '#334155', marginLeft: 6, fontWeight: 400}}>пиков нет</span>
                         }
                       </div>
                       <SeasonBars coefs={coefs} peak={f.peak_months}/>
+                      {/* Week comparison 2024 vs 2025 */}
+                      <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 8}}>
+                        {[
+                          {label: `Эта неделя (${new Date(f.calc_date).toLocaleDateString('ru-RU',{day:'numeric',month:'short'})})`, v24: f.week_same_2024, v25: f.week_same_2025},
+                          {label: 'Следующая неделя', v24: f.week_next_2024, v25: f.week_next_2025},
+                        ].map(row => (
+                          <div key={row.label} style={{background: '#0a1628', borderRadius: 7, padding: '8px 10px'}}>
+                            <div style={{fontSize: '0.68em', color: '#475569', marginBottom: 5}}>{row.label}</div>
+                            <div style={{display: 'flex', gap: 12}}>
+                              <div>
+                                <div style={{fontSize: '0.62em', color: '#334155'}}>2024</div>
+                                <div style={{fontWeight: 600, color: '#64748b', fontSize: '0.9em'}}>{row.v24 > 0 ? `${Math.round(row.v24)} шт.` : '—'}</div>
+                              </div>
+                              <div>
+                                <div style={{fontSize: '0.62em', color: '#334155'}}>2025</div>
+                                <div style={{fontWeight: 600, color: row.v25 > row.v24 ? '#22c55e' : '#94a3b8', fontSize: '0.9em'}}>{row.v25 > 0 ? `${Math.round(row.v25)} шт.` : '—'}</div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
 
-                    {/* Formula breakdown */}
-                    <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px', fontSize: '0.78em', marginBottom: 14}}>
-                      {([
-                        ['Ср. продажи/день (365 дн.)', `${fmtN(f.avg_day_365)} шт./день`],
-                        ['Ср. продажи/день (30 дн.)', `${fmtN(f.avg_day_30)} шт./день`],
-                        ['Std (без аномалий)', `${fmtN(f.std_day_no_anom)}`],
-                        ['Наблюдаемых дней 365', `${f.observed_days_365}`],
-                        ['Базовый недельный спрос', `${fmtN(f.w_base, 1)} шт./нед.`],
-                        ['Сезонный недельный спрос', `${fmtN(f.w_season, 1)} шт./нед.`],
-                        ['K месяца (clip 0.85–1.25)', `${fmtN(f.k_month, 3)} → ${fmtN(f.k_month_clip, 3)}`],
-                        ['W прогноз (ядро)', `${fmtN(f.w_forecast_core, 1)} шт./нед.`],
-                        ['W аномальная надбавка', `${fmtN(f.w_anom_adj, 2)} шт./нед.`],
-                        ['W прогноз итого', `${fmtN(f.w_forecast_final, 1)} шт./нед.`],
-                        ['Аномалий за 365 дн.', `${f.anomaly_days_count_365} дн. (p=${(f.anomaly_prob_day * 100).toFixed(2)}%)`],
-                        ['Избыток аномалии', `${fmtN(f.anomaly_excess_avg, 1)} шт./день`],
-                        ['Страховой запас (σ·√L)', `${fmtN(f.ss_base, 1)} шт.`],
-                        ['Страховой запас (аном.)', `${fmtN(f.ss_anom, 1)} шт.`],
-                        ['Срок доставки / цикл', `${f.lead_time_days} / ${f.order_cycle_days} дн.`],
-                        ['Продажи за 365 дн.', `${fmtN(f.total_net_sales_365, 0)} шт.`],
-                      ] as [string, string][]).map(([label, val]) => (
-                        <div key={label} style={{
-                          display: 'flex', justifyContent: 'space-between',
-                          borderBottom: '1px solid #1e293b', padding: '4px 0', gap: 6,
-                        }}>
-                          <span style={{color: '#475569'}}>{label}</span>
-                          <span style={{color: '#94a3b8', textAlign: 'right', fontVariantNumeric: 'tabular-nums'}}>{val}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Recommendation card */}
-                    <div style={{
-                      background: '#0a1628', borderRadius: 8, padding: '14px 16px',
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-                    }}>
+                    {/* Anomaly section */}
+                    {f.anomaly_days_count_365 > 0 && (
                       <div>
-                        <div style={{fontSize: '0.72em', color: '#475569', marginBottom: 2}}>Прогноз/день</div>
-                        <div style={{fontWeight: 600, color: '#64748b', fontSize: '0.95em'}}>
-                          {fmtN(f.forecast_day_matrix)} шт.
+                        <div style={{fontSize: '0.76em', color: '#94a3b8', fontWeight: 600, marginBottom: 6}}>
+                          Аномальные продажи
+                          <span style={{color: '#475569', fontWeight: 400, marginLeft: 6}}>
+                            {f.anomaly_days_count_365} {f.anomaly_days_count_365 === 1 ? 'день' : 'дней'} за год · порог: {r2(f.anomaly_threshold ?? (f.avg_day_365 + 3 * f.std_day_no_anom))} шт./день
+                          </span>
                         </div>
+                        {f.anomaly_dates && f.anomaly_dates.length > 0
+                          ? <div style={{display: 'flex', flexDirection: 'column', gap: 3}}>
+                              {f.anomaly_dates.map(d => (
+                                <div key={d.sale_date} style={{display: 'flex', justifyContent: 'space-between', background: '#0a1628', borderRadius: 5, padding: '5px 10px', fontSize: '0.8em'}}>
+                                  <span style={{color: '#64748b'}}>{new Date(d.sale_date).toLocaleDateString('ru-RU', {day: 'numeric', month: 'long', year: 'numeric'})}</span>
+                                  <span style={{fontWeight: 700, color: '#f87171'}}>{d.net_qty} шт.</span>
+                                </div>
+                              ))}
+                            </div>
+                          : <div style={{fontSize: '0.78em', color: '#334155'}}>Загрузка дат…</div>
+                        }
                       </div>
-                      <div>
-                        <div style={{fontSize: '0.72em', color: '#475569', marginBottom: 2}}>Страховой запас</div>
-                        <div style={{fontWeight: 600, color: '#f59e0b', fontSize: '0.95em'}}>
-                          {fmtN(f.ss_total, 1)} шт.
-                        </div>
-                      </div>
-                      <div>
-                        <div style={{fontSize: '0.72em', color: '#475569', marginBottom: 2}}>Рекоменд. остаток</div>
-                        <div style={{fontWeight: 600, color: '#94a3b8', fontSize: '0.95em'}}>
-                          {fmtN(f.recommended_stock, 1)} шт.
-                        </div>
-                      </div>
-                      <div style={{textAlign: 'center', background: f.to_order > 0 ? '#052e16' : '#0f172a', borderRadius: 8, padding: '8px 20px', border: `1px solid ${f.to_order > 0 ? '#16a34a' : '#1e293b'}`}}>
-                        <div style={{fontSize: '0.72em', color: '#475569', marginBottom: 2}}>Заказать</div>
-                        <div style={{fontWeight: 800, fontSize: '1.8em', color: f.to_order > 0 ? '#22c55e' : '#334155', lineHeight: 1}}>
-                          {f.to_order}
-                        </div>
-                        <div style={{fontSize: '0.7em', color: '#475569'}}>шт.</div>
-                      </div>
-                    </div>
+                    )}
                   </div>
                 );
               })()

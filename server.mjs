@@ -684,6 +684,25 @@ app.get('/api/catalog2/item/:code/forecast', (req, res) => {
     const row = db.prepare('SELECT * FROM catalog_forecast WHERE item_code = ?').get(code);
     if (!row) return res.status(404).json({error: 'no forecast data'});
     try { row.peak_months = JSON.parse(row.peak_months || '[]'); } catch { row.peak_months = []; }
+
+    // Anomalous days: dates where net sales > mean + 3σ
+    const threshold = row.avg_day_365 + 3 * row.std_day_no_anom;
+    if (threshold > 0 && row.observed_days_365 >= 5) {
+      row.anomaly_dates = db.prepare(`
+        SELECT sale_date,
+               ROUND(MAX(0.0, SUM(CAST(sales_qty AS REAL) - CAST(return_qty AS REAL))), 1) AS net_qty
+        FROM catalog_sales
+        WHERE item_code = ? AND sale_date >= date(?, '-365 days')
+        GROUP BY sale_date
+        HAVING net_qty > ?
+        ORDER BY net_qty DESC
+        LIMIT 10
+      `).all(code, row.calc_date, threshold);
+    } else {
+      row.anomaly_dates = [];
+    }
+    row.anomaly_threshold = Math.round(threshold * 10) / 10;
+
     res.json(row);
   } catch (err) { res.status(500).json({error: err.message}); }
 });
