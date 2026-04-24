@@ -546,6 +546,14 @@ function ProductDetailModal2({
 
   const totalSales = (salesData?.series || []).reduce((a, s) => a + s.sales, 0);
   const totalReturns = (salesData?.series || []).reduce((a, s) => a + s.returns, 0);
+  const periodCount = salesData?.series?.length || 0;
+  const avgSalesPerPeriod = periodCount > 0 ? totalSales / periodCount : 0;
+  const peakSalesPoint = salesData?.series?.length
+    ? salesData.series.reduce((best, point) => point.sales > best.sales ? point : best, salesData.series[0])
+    : null;
+  const zeroPeriods = (salesData?.series || []).filter(point => (point.sales || 0) === 0).length;
+  const activePeriods = Math.max(0, periodCount - zeroPeriods);
+  const activeShare = periodCount > 0 ? Math.round((activePeriods / periodCount) * 100) : 0;
 
   return (
     <div
@@ -553,54 +561,54 @@ function ProductDetailModal2({
       onClick={onClose}
     >
       <div
-        style={{background: '#1e293b', borderRadius: 14, padding: '20px 24px', width: '96%', maxWidth: 1100, boxShadow: '0 12px 60px rgba(0,0,0,.6)', marginBottom: 40}}
+        style={{background: '#1e293b', borderRadius: 18, padding: '28px 30px', width: '97%', maxWidth: 1280, boxShadow: '0 18px 80px rgba(0,0,0,.6)', marginBottom: 40}}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div style={{display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 16}}>
+        <div style={{display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 22, alignItems: 'flex-start'}}>
           <div style={{flex: 1, minWidth: 0}}>
-            <div style={{fontSize: '0.72em', color: '#475569', marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}} title={item.group_full_path || ''}>
+            <div style={{fontSize: '0.88em', color: '#64748b', marginBottom: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}} title={item.group_full_path || ''}>
               {pathParts.slice(1).join(' › ')}
             </div>
-            <div style={{fontWeight: 700, fontSize: '1.05em', color: '#f1f5f9', lineHeight: 1.3}}>{item.item_name}</div>
-            <div style={{display: 'flex', gap: 10, marginTop: 4, fontSize: '0.78em', color: '#64748b', flexWrap: 'wrap'}}>
-              {item.item_code && <span>Код: <span style={{fontFamily: 'monospace', color: '#94a3b8'}}>{item.item_code.trim()}</span></span>}
-              {item.barcode && <span>ШК: <span style={{fontFamily: 'monospace', color: '#94a3b8'}}>{item.barcode}</span></span>}
-              {item.variant && <span>Вариант: {item.variant}</span>}
+            <div style={{fontWeight: 800, fontSize: '1.5em', color: '#f8fafc', lineHeight: 1.25}}>{item.item_name}</div>
+            <div style={{display: 'flex', gap: 14, marginTop: 8, fontSize: '0.95em', color: '#94a3b8', flexWrap: 'wrap'}}>
+              {item.item_code && <span>Код: <span style={{fontFamily: 'monospace', color: '#e2e8f0'}}>{item.item_code.trim()}</span></span>}
+              {item.barcode && <span>ШК: <span style={{fontFamily: 'monospace', color: '#e2e8f0'}}>{item.barcode}</span></span>}
+              {item.variant && <span>Вариант: <span style={{color: '#e2e8f0'}}>{item.variant}</span></span>}
             </div>
           </div>
           <button
             onClick={onClose}
-            style={{background: 'none', border: '1px solid #334155', borderRadius: 8, color: '#64748b', cursor: 'pointer', padding: '4px 12px', fontSize: '1em', flexShrink: 0}}
+            style={{background: '#0f172a', border: '1px solid #334155', borderRadius: 10, color: '#94a3b8', cursor: 'pointer', padding: '8px 14px', fontSize: '1.05em', flexShrink: 0}}
           >✕</button>
         </div>
 
         {/* Info cards */}
-        <div style={{display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 20}}>
+        <div style={{display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 24}}>
           {[
             {label: 'Остаток', value: item.qty > 0 ? item.qty.toLocaleString('ru-RU') + ' шт.' : '—', color: item.qty > 0 ? '#22c55e' : '#ef4444'},
-            {label: 'Резерв', value: item.reserve > 0 ? item.reserve.toLocaleString('ru-RU') : '—', color: '#f1f5f9'},
-            {label: 'Цена продажи', value: item.retail_price > 0 ? item.retail_price.toLocaleString('ru-RU') + ' ₽' : '—', color: '#f1f5f9'},
+            {label: 'Резерв', value: item.reserve > 0 ? item.reserve.toLocaleString('ru-RU') : '—', color: '#f8fafc'},
+            {label: 'Цена продажи', value: item.retail_price > 0 ? item.retail_price.toLocaleString('ru-RU') + ' ₽' : '—', color: '#f8fafc'},
             {label: `Маржа ${margin.toFixed(0)}%`, value: profit > 0 ? profit.toLocaleString('ru-RU') + ' ₽' : '—', color: margin > 30 ? '#22c55e' : margin > 10 ? '#f59e0b' : '#ef4444'},
           ].map(({label, value, color}) => (
-            <div key={label} style={{background: '#0f172a', borderRadius: 8, padding: '10px 12px'}}>
-              <div style={{fontSize: '0.7em', color: '#475569', marginBottom: 3}}>{label}</div>
-              <div style={{fontWeight: 700, color, fontSize: '0.95em'}}>{value}</div>
+            <div key={label} style={{background: '#0f172a', borderRadius: 12, padding: '14px 16px', minHeight: 88, display: 'flex', flexDirection: 'column', justifyContent: 'space-between'}}>
+              <div style={{fontSize: '0.86em', color: '#64748b', marginBottom: 6}}>{label}</div>
+              <div style={{fontWeight: 800, color, fontSize: '1.28em', lineHeight: 1.15}}>{value}</div>
             </div>
           ))}
         </div>
 
         {/* Chart + forecast: two columns */}
-        <div style={{display: 'flex', gap: 16, alignItems: 'flex-start'}}>
+        <div style={{display: 'flex', gap: 20, alignItems: 'flex-start'}}>
           <div style={{flex: 1, minWidth: 0}}>
         {/* Chart section */}
-        <div style={{background: '#0f172a', borderRadius: 10, padding: '16px'}}>
+        <div style={{background: '#0f172a', borderRadius: 14, padding: '20px 22px'}}>
           {/* Title + stats */}
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 6}}>
-            <div style={{fontWeight: 600, fontSize: '0.88em', color: '#f1f5f9'}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10}}>
+            <div style={{fontWeight: 700, fontSize: '1.12em', color: '#f8fafc'}}>
               Динамика продаж
               {salesData?.has_data && (
-                <span style={{fontWeight: 400, color: '#64748b', marginLeft: 8, fontSize: '0.88em'}}>
+                <span style={{fontWeight: 500, color: '#94a3b8', marginLeft: 10, fontSize: '0.94em'}}>
                   {totalSales.toLocaleString('ru-RU')} прод. · {totalReturns} возвр.
                   {salesData.series.length > 0 && (
                     <span style={{marginLeft: 6, color: '#334155'}}>({salesData.series.length} {salesData.gran === 'day' ? 'дней' : salesData.gran === 'week' ? 'недель' : 'мес.'})</span>
@@ -609,10 +617,10 @@ function ProductDetailModal2({
               )}
             </div>
             {/* Granularity toggle */}
-            <div style={{display: 'flex', gap: 2, background: '#1e293b', borderRadius: 7, padding: 2}}>
+            <div style={{display: 'flex', gap: 4, background: '#1e293b', borderRadius: 9, padding: 3}}>
               {(['day','week','month'] as C2Gran[]).map(g => (
                 <button key={g} onClick={() => setChartGran(g)} style={{
-                  padding: '3px 10px', borderRadius: 5, border: 'none', cursor: 'pointer', fontSize: '0.76em', fontWeight: 600,
+                  padding: '6px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: '0.88em', fontWeight: 700,
                   background: chartGran === g ? '#2563eb' : 'transparent',
                   color: chartGran === g ? '#fff' : '#64748b',
                   transition: 'background .15s',
@@ -624,25 +632,25 @@ function ProductDetailModal2({
           </div>
 
           {/* Date range + presets */}
-          <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap'}}>
+          <div style={{display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap'}}>
             <div style={{display: 'flex', gap: 3}}>
               {C2_PRESETS.map(p => (
                 <button key={p.label} onClick={() => applyPreset(p.months)} style={{
-                  padding: '2px 7px', borderRadius: 5, border: '1px solid #334155', cursor: 'pointer',
-                  background: '#1e293b', color: '#64748b', fontSize: '0.73em',
+                  padding: '5px 10px', borderRadius: 7, border: '1px solid #334155', cursor: 'pointer',
+                  background: '#1e293b', color: '#94a3b8', fontSize: '0.84em', fontWeight: 600,
                 }}>{p.label}</button>
               ))}
             </div>
-            <label style={{display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.78em', color: '#475569'}}>
+            <label style={{display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.9em', color: '#94a3b8'}}>
               от
               <input type="month" value={chartFrom} onChange={e => setChartFrom(e.target.value)}
-                style={{background: '#1e293b', border: '1px solid #334155', borderRadius: 5, color: '#f1f5f9', padding: '2px 6px', fontSize: '0.88em'}}
+                style={{background: '#1e293b', border: '1px solid #334155', borderRadius: 7, color: '#f8fafc', padding: '5px 9px', fontSize: '0.98em'}}
               />
             </label>
-            <label style={{display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.78em', color: '#475569'}}>
+            <label style={{display: 'flex', gap: 6, alignItems: 'center', fontSize: '0.9em', color: '#94a3b8'}}>
               до
               <input type="month" value={chartTo} onChange={e => setChartTo(e.target.value)}
-                style={{background: '#1e293b', border: '1px solid #334155', borderRadius: 5, color: '#f1f5f9', padding: '2px 6px', fontSize: '0.88em'}}
+                style={{background: '#1e293b', border: '1px solid #334155', borderRadius: 7, color: '#f8fafc', padding: '5px 9px', fontSize: '0.98em'}}
               />
             </label>
           </div>
@@ -659,10 +667,35 @@ function ProductDetailModal2({
                 forecastDayMatrix={forecastData?.forecast_day_matrix}
               />
           }
+
+          <div style={{display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginTop: 16}}>
+            {[
+              {label: 'Среднее за период', value: `${avgSalesPerPeriod.toLocaleString('ru-RU', {maximumFractionDigits: 1})} шт.`, tone: '#f8fafc'},
+              {label: salesData?.gran === 'day' ? 'Дней без продаж' : salesData?.gran === 'week' ? 'Недель без продаж' : 'Месяцев без продаж', value: `${zeroPeriods}`, tone: zeroPeriods > 0 ? '#f59e0b' : '#22c55e'},
+              {label: 'Активных периодов', value: `${activePeriods} / ${periodCount || 0} · ${activeShare}%`, tone: '#60a5fa'},
+              {label: 'Пик продаж', value: peakSalesPoint ? `${peakSalesPoint.sales} шт.` : '—', tone: '#22c55e', sub: peakSalesPoint ? String(peakSalesPoint.label ?? peakSalesPoint.date ?? '') : undefined},
+            ].map(card => (
+              <div key={card.label} style={{background: '#111827', border: '1px solid #1f2937', borderRadius: 12, padding: '12px 14px', minHeight: 92}}>
+                <div style={{fontSize: '0.88em', color: '#94a3b8', marginBottom: 6}}>{card.label}</div>
+                <div style={{fontSize: '1.15em', fontWeight: 800, color: card.tone, lineHeight: 1.2}}>{card.value}</div>
+                {card.sub && <div style={{fontSize: '0.88em', color: '#64748b', marginTop: 6}}>{card.sub}</div>}
+              </div>
+            ))}
+          </div>
+
+          <div style={{marginTop: 12, background: '#111827', border: '1px solid #1f2937', borderRadius: 12, padding: '14px 16px', color: '#cbd5e1', fontSize: '0.98em', lineHeight: 1.55}}>
+            {periodCount > 0
+              ? activeShare < 35
+                ? 'Спрос редкий: большая часть периодов пустая, поэтому важно смотреть не только пики, но и длинные промежутки без продаж.'
+                : activeShare < 70
+                ? 'Спрос умеренно прерывистый: продажи есть регулярно, но заметная часть периодов остаётся пустой.'
+                : 'Спрос достаточно ровный: продажи присутствуют в большинстве периодов, график можно читать как стабильный паттерн.'
+              : 'По выбранному диапазону пока нет данных для интерпретации.'}
+          </div>
         </div>
           </div>{/* /chart column */}
 
-          <div style={{width: 420, flexShrink: 0}}>
+          <div style={{width: 460, flexShrink: 0}}>
         {/* Forecast section */}
         {forecastLoading
           ? <div style={{display: 'flex', alignItems: 'center', gap: 8, padding: '28px 0', justifyContent: 'center', color: '#475569', fontSize: '0.88em'}}>
@@ -699,13 +732,13 @@ function ProductDetailModal2({
                 const staleColor = calcAge > 14 ? '#ef4444' : calcAge > 7 ? '#f59e0b' : null;
 
                 return (
-                  <div style={{background: '#0f172a', borderRadius: 10, padding: '16px', marginTop: 14}}>
+                  <div style={{background: '#0f172a', borderRadius: 14, padding: '20px', marginTop: 0}}>
 
                     {/* Header */}
-                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 6}}>
-                      <span style={{fontWeight: 600, fontSize: '0.88em', color: '#f1f5f9'}}>
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10}}>
+                      <span style={{fontWeight: 700, fontSize: '1.06em', color: '#f8fafc'}}>
                         Прогноз закупки
-                        <span style={{fontSize: '0.78em', fontWeight: 400, color: '#475569', marginLeft: 8}}>
+                        <span style={{fontSize: '0.9em', fontWeight: 500, color: '#94a3b8', marginLeft: 10}}>
                           {f.calc_date}
                           {calcAge > 3 && (
                             <span style={{marginLeft: 5, padding: '0 5px', borderRadius: 3, fontSize: '0.88em',
@@ -719,30 +752,30 @@ function ProductDetailModal2({
                       </span>
                       <div style={{display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap'}}>
                         <ClassBadge abc={f.abc_class} xyz={f.xyz_class}/>
-                        <span style={{background: dm.color + '22', color: dm.color, borderRadius: 4, padding: '2px 7px', fontSize: '0.74em', fontWeight: 600, border: `1px solid ${dm.color}44`}}>{dm.label}</span>
+                        <span style={{background: dm.color + '22', color: dm.color, borderRadius: 6, padding: '4px 9px', fontSize: '0.86em', fontWeight: 700, border: `1px solid ${dm.color}44`}}>{dm.label}</span>
                       </div>
                     </div>
 
                     {/* Demand metrics: 4 cards */}
-                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginBottom: 10}}>
+                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 14}}>
                       {[
                         {label: 'Ср./день', sub: 'за 365 дн.', val: `${fmt1(f.avg_day_365)} шт.`, color: '#94a3b8'},
                         {label: 'Ср./день', sub: `за 30 дн. · ${trendLabel}`, val: `${fmt1(f.avg_day_30)} шт.`, color: trendColor},
                         {label: 'Сезонный', sub: `нед. ${new Date(f.calc_date).toLocaleDateString('ru-RU',{day:'numeric',month:'short'})}`, val: `${fmt1(f.w_season)} шт.`, color: wBaseDirColor},
                         {label: 'Прогноз', sub: 'в неделю итого', val: `${fmt1(f.w_forecast_final)} шт.`, color: '#60a5fa'},
                       ].map(c => (
-                        <div key={c.label} style={{background: '#0a1628', borderRadius: 8, padding: '9px 10px'}}>
-                          <div style={{fontSize: '0.68em', color: '#475569', marginBottom: 1}}>{c.label}</div>
-                          <div style={{fontSize: '0.62em', color: '#334155', marginBottom: 4}}>{c.sub}</div>
-                          <div style={{fontWeight: 700, color: c.color, fontSize: '0.9em'}}>{c.val}</div>
+                        <div key={c.label} style={{background: '#0a1628', borderRadius: 10, padding: '12px 13px', minHeight: 96}}>
+                          <div style={{fontSize: '0.88em', color: '#94a3b8', marginBottom: 4}}>{c.label}</div>
+                          <div style={{fontSize: '0.78em', color: '#64748b', marginBottom: 8, lineHeight: 1.35}}>{c.sub}</div>
+                          <div style={{fontWeight: 800, color: c.color, fontSize: '1.18em', lineHeight: 1.15}}>{c.val}</div>
                         </div>
                       ))}
                     </div>
 
                     {/* Explanation of base vs seasonal */}
-                    <div style={{fontSize: '0.74em', color: '#475569', background: '#0a1628', borderRadius: 7, padding: '8px 10px', marginBottom: 14, lineHeight: 1.6}}>
-                      <span style={{color: '#64748b'}}>Базовый</span> = среднее за год × 7 дн.{' '}
-                      <span style={{color: '#64748b'}}>Сезонный</span> = факт. продажи на этой / следующей неделе в 2024–2025 гг.{' '}
+                    <div style={{fontSize: '0.96em', color: '#cbd5e1', background: '#0a1628', borderRadius: 10, padding: '12px 14px', marginBottom: 16, lineHeight: 1.7}}>
+                      <span style={{color: '#94a3b8', fontWeight: 600}}>Базовый</span> = среднее за год × 7 дн.{' '}
+                      <span style={{color: '#94a3b8', fontWeight: 600}}>Сезонный</span> = факт. продажи на этой / следующей неделе в 2024–2025 гг.{' '}
                       Множитель месяца: ×{f.k_month_clip.toFixed(2)}
                       {f.k_month_clip !== 1 && <span style={{color: f.k_month_clip > 1 ? '#22c55e' : '#f59e0b'}}> ({f.k_month_clip > 1 ? '+' : ''}{((f.k_month_clip - 1) * 100).toFixed(0)}% от среднего)</span>}.{' '}
                       {f.w_anom_adj > 0.1 && <span>Поправка на всплески: <span style={{color: '#f87171'}}>+{fmt1(f.w_anom_adj)} шт./нед.</span>{' '}</span>}
@@ -755,16 +788,16 @@ function ProductDetailModal2({
                     </div>
 
                     {/* Order horizon + recommendation */}
-                    <div style={{background: '#0a1628', borderRadius: 8, padding: '12px 14px', marginBottom: 14}}>
+                    <div style={{background: '#0a1628', borderRadius: 10, padding: '14px 16px', marginBottom: 16}}>
                       <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap'}}>
-                        <span style={{fontSize: '0.8em', color: '#64748b'}}>Запас на</span>
+                        <span style={{fontSize: '0.96em', color: '#cbd5e1'}}>Запас на</span>
                         <input
                           type="number" min={1} max={365}
                           value={forecastDays}
                           onChange={e => setForecastDays(Math.max(1, Math.min(365, Number(e.target.value) || 14)))}
-                          style={{width: 60, padding: '4px 8px', borderRadius: 6, border: '1px solid #334155', background: '#1e293b', color: '#f1f5f9', fontSize: '0.9em', textAlign: 'center'}}
+                          style={{width: 72, padding: '6px 10px', borderRadius: 8, border: '1px solid #334155', background: '#1e293b', color: '#f8fafc', fontSize: '1em', textAlign: 'center', fontWeight: 700}}
                         />
-                        <span style={{fontSize: '0.8em', color: '#64748b'}}>дней после получения <span style={{color: '#475569'}}>(+ {f.lead_time_days} дн. доставки)</span></span>
+                        <span style={{fontSize: '0.96em', color: '#cbd5e1'}}>дней после получения <span style={{color: '#94a3b8'}}>(+ {f.lead_time_days} дн. доставки)</span></span>
                         {coverageDays !== null && (
                           <span style={{fontSize: '0.78em', color: '#475569'}}>
                             · Текущий запас:{' '}
@@ -787,10 +820,10 @@ function ProductDetailModal2({
                           <div style={{fontWeight: 600, color: '#64748b'}}>{item.qty.toLocaleString('ru-RU')} шт.</div>
                         </div>
                         <div style={{flex: 1}}/>
-                        <div style={{textAlign: 'center', background: dynOrder > 0 ? '#052e16' : '#0f172a', borderRadius: 8, padding: '8px 16px', border: `1px solid ${dynOrder > 0 ? '#16a34a' : '#1e293b'}`}}>
-                          <div style={{fontSize: '0.68em', color: '#475569'}}>Заказать</div>
-                          <div style={{fontWeight: 800, fontSize: '1.7em', color: dynOrder > 0 ? '#22c55e' : '#334155', lineHeight: 1}}>{dynOrder}</div>
-                          <div style={{fontSize: '0.65em', color: '#475569'}}>
+                        <div style={{textAlign: 'center', background: dynOrder > 0 ? '#052e16' : '#0f172a', borderRadius: 10, padding: '10px 18px', border: `1px solid ${dynOrder > 0 ? '#16a34a' : '#1e293b'}`}}>
+                          <div style={{fontSize: '0.86em', color: '#94a3b8'}}>Заказать</div>
+                          <div style={{fontWeight: 800, fontSize: '2.05em', color: dynOrder > 0 ? '#22c55e' : '#334155', lineHeight: 1}}>{dynOrder}</div>
+                          <div style={{fontSize: '0.82em', color: '#94a3b8'}}>
                             шт.{dynOrder > 0 && item.purchase_price > 0 ? ` · ≈ ${(dynOrder * item.purchase_price).toLocaleString('ru-RU')} ₽` : ''}
                           </div>
                         </div>
@@ -799,7 +832,7 @@ function ProductDetailModal2({
 
                     {/* Seasonality */}
                     <div style={{marginBottom: 14}}>
-                      <div style={{fontSize: '0.76em', color: '#94a3b8', marginBottom: 5, fontWeight: 600}}>
+                      <div style={{fontSize: '0.96em', color: '#e2e8f0', marginBottom: 8, fontWeight: 700}}>
                         Сезонность
                         {f.peak_months.length > 0
                           ? <span style={{color: '#f59e0b', marginLeft: 6, fontWeight: 400}}>
@@ -835,9 +868,9 @@ function ProductDetailModal2({
                     {/* Anomaly section */}
                     {f.anomaly_days_count_365 > 0 && (
                       <div>
-                        <div style={{fontSize: '0.76em', color: '#94a3b8', fontWeight: 600, marginBottom: 6}}>
+                        <div style={{fontSize: '0.96em', color: '#e2e8f0', fontWeight: 700, marginBottom: 8}}>
                           Аномальные продажи
-                          <span style={{color: '#475569', fontWeight: 400, marginLeft: 6}}>
+                          <span style={{color: '#94a3b8', fontWeight: 500, marginLeft: 8}}>
                             {f.anomaly_days_count_365} {f.anomaly_days_count_365 === 1 ? 'день' : 'дней'} за год · порог: {r2(f.anomaly_threshold ?? (f.avg_day_365 + 3 * f.std_day_no_anom))} шт./день
                           </span>
                         </div>
