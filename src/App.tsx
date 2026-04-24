@@ -158,9 +158,9 @@ function StatusDot({status}: {status: string}) {
 
 /** ABC/XYZ badge */
 const ABC_TIPS: Record<string, string> = {
-  A: 'A — топ 50% по объёму продаж. Высокий приоритет закупки.',
-  B: 'B — следующие 30% по объёму. Средний приоритет.',
-  C: 'C — оставшиеся 20%. Низкий приоритет, заказывать осторожно.',
+  A: 'A — топ 70% по выручке. Высокий приоритет закупки.',
+  B: 'B — следующие 20% по выручке. Средний приоритет.',
+  C: 'C — нижние 10% по выручке. Низкий приоритет, заказывать осторожно.',
 };
 const XYZ_TIPS: Record<string, string> = {
   X: 'X — стабильный спрос (CV < 0.5). Прогноз надёжен.',
@@ -182,8 +182,9 @@ function ClassBadge({abc, xyz}: {abc: string; xyz: string}) {
 
 const RU_MONTHS = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
 
-function SeasonBars({coefs, peak}: {coefs: number[]; peak: number[]}) {
-  const W = 320, H = 72, PB = 18;
+function SeasonBars({coefs, peak, currentMonth}: {coefs: number[]; peak: number[]; currentMonth?: number}) {
+  const [hoverM, setHoverM] = useState<number | null>(null);
+  const W = 320, H = 82, PB = 18;
   const ph = H - PB;
   const barW = W / 12;
   const maxC = Math.max(...coefs, 1.4);
@@ -192,15 +193,23 @@ function SeasonBars({coefs, peak}: {coefs: number[]; peak: number[]}) {
       {coefs.map((c, i) => {
         const m = i + 1;
         const isPeak = peak.includes(m);
+        const isCur = m === currentMonth;
+        const isHov = m === hoverM;
         const bH = Math.max(2, (c / maxC) * ph);
         const x = i * barW;
+        const barFill = isCur ? '#22c55e' : isPeak ? '#f59e0b' : c > 1.0 ? '#3b82f6' : '#334155';
         return (
-          <g key={m}>
-            {isPeak && <rect x={x} y={0} width={barW} height={H} fill="rgba(245,158,11,0.07)"/>}
+          <g key={m} onMouseEnter={() => setHoverM(m)} onMouseLeave={() => setHoverM(null)} style={{cursor: 'default'}}>
+            {(isPeak || isCur) && <rect x={x} y={0} width={barW} height={H} fill={isCur ? 'rgba(34,197,94,0.08)' : 'rgba(245,158,11,0.07)'}/>}
             <rect x={x + 1} y={ph - bH} width={barW - 2} height={bH}
-              fill={isPeak ? '#f59e0b' : c > 1.0 ? '#3b82f6' : '#334155'} rx={2}/>
+              fill={barFill} opacity={isHov ? 1 : 0.82} rx={2}/>
+            {isCur && <rect x={x + 1} y={ph - bH} width={barW - 2} height={bH} fill="none" stroke="#22c55e" strokeWidth={0.8} rx={2}/>}
             <text x={x + barW / 2} y={H - 3} textAnchor="middle" fontSize={7.5}
-              fill={isPeak ? '#f59e0b' : '#475569'}>{RU_MONTHS[i]}</text>
+              fill={isCur ? '#22c55e' : isPeak ? '#f59e0b' : '#475569'} fontWeight={isCur ? 700 : 400}>{RU_MONTHS[i]}</text>
+            {isHov && (
+              <text x={x + barW / 2} y={Math.max(10, ph - bH - 3)} textAnchor="middle" fontSize={8}
+                fill={barFill} fontWeight="bold">{c.toFixed(2)}</text>
+            )}
           </g>
         );
       })}
@@ -211,6 +220,13 @@ function SeasonBars({coefs, peak}: {coefs: number[]; peak: number[]}) {
 }
 
 // ── catalog2: line chart helpers ──────────────────────────────────────────────
+
+function periodMonth(period: string, gran: C2Gran): number {
+  if (gran === 'day' || gran === 'month') return parseInt(period.slice(5, 7), 10) || 0;
+  const m = period.match(/\d{4}-W(\d+)/);
+  if (!m) return 0;
+  return Math.min(12, Math.max(1, Math.ceil(parseInt(m[1]) / 4.33)));
+}
 
 function fmtPeriod(period: string | undefined | null, gran: C2Gran): string {
   if (!period) return '—';
@@ -227,7 +243,7 @@ function fmtPeriod(period: string | undefined | null, gran: C2Gran): string {
   } catch { return period; }
 }
 
-function SalesLineChart({series, gran, peakMonths}: {series: C2SalesSeries[]; gran: C2Gran; peakMonths?: number[]}) {
+function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: C2SalesSeries[]; gran: C2Gran; peakMonths?: number[]; forecastDayMatrix?: number}) {
   const [zoomRange, setZoomRange] = useState<[number,number] | null>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [dragStart, setDragStart] = useState<number | null>(null);
@@ -251,7 +267,12 @@ function SalesLineChart({series, gran, peakMonths}: {series: C2SalesSeries[]; gr
 
   const maxSales = Math.max(...displayed.map(s => s.sales), 1);
   const maxRet   = Math.max(...displayed.map(s => s.returns), 0);
-  const maxY = Math.max(maxSales, maxRet, 1);
+  const forecastPerPeriod = forecastDayMatrix != null
+    ? gran === 'day' ? forecastDayMatrix
+    : gran === 'week' ? forecastDayMatrix * 7
+    : forecastDayMatrix * 30.4
+    : null;
+  const maxY = Math.max(maxSales, maxRet, forecastPerPeriod ?? 0, 1);
 
   const xOf = (i: number) => PL + (n <= 1 ? pw / 2 : (i / (n - 1)) * pw);
   const yOf = (v: number) => PT + ph - Math.max(0, Math.min(1, v / maxY)) * ph;
@@ -356,9 +377,10 @@ function SalesLineChart({series, gran, peakMonths}: {series: C2SalesSeries[]; gr
           );
         })}
 
-        {/* Peak month bands (month granularity) */}
-        {peakMonths && peakMonths.length > 0 && gran === 'month' && displayed.map((s, i) => {
-          const m = s.period ? parseInt(s.period.slice(5, 7), 10) : 0;
+        {/* Peak month bands (all granularities) */}
+        {peakMonths && peakMonths.length > 0 && displayed.map((s, i) => {
+          if (!s.period) return null;
+          const m = periodMonth(s.period, gran);
           if (!peakMonths.includes(m)) return null;
           const x = xOf(i);
           const step = n > 1 ? pw / (n - 1) : pw;
@@ -448,6 +470,16 @@ function SalesLineChart({series, gran, peakMonths}: {series: C2SalesSeries[]; gr
           </>
         )}
 
+        {/* Forecast reference line */}
+        {forecastPerPeriod != null && forecastPerPeriod > 0 && (
+          <>
+            <line x1={PL} y1={yOf(forecastPerPeriod)} x2={W - PR} y2={yOf(forecastPerPeriod)}
+              stroke="#f59e0b" strokeWidth={1} strokeDasharray="5 3" opacity={0.7}/>
+            <text x={W - PR - 4} y={yOf(forecastPerPeriod) - 4} fontSize={7.5} textAnchor="end"
+              fill="#f59e0b" opacity={0.85}>прогноз</text>
+          </>
+        )}
+
         {/* Legend */}
         <line x1={PL} y1={10} x2={PL + 16} y2={10} stroke="#3b82f6" strokeWidth={2}/>
         <circle cx={PL + 8} cy={10} r={2} fill="#3b82f6"/>
@@ -496,6 +528,9 @@ function ProductDetailModal2({
   forecastData: C2Forecast | null; forecastLoading: boolean;
 }) {
   const [forecastDays, setForecastDays] = useState(forecastData?.order_cycle_days ?? 14);
+  useEffect(() => {
+    setForecastDays(forecastData?.order_cycle_days ?? 14);
+  }, [forecastData?.item_code]);
   const profit = item.retail_price - item.purchase_price;
   const margin = item.retail_price > 0 ? (profit / item.retail_price * 100) : 0;
   const pathParts = item.group_full_path ? item.group_full_path.split(' / ') : [];
@@ -618,6 +653,7 @@ function ProductDetailModal2({
                 series={salesData?.series || []}
                 gran={salesData?.gran ?? chartGran}
                 peakMonths={forecastData?.peak_months}
+                forecastDayMatrix={forecastData?.forecast_day_matrix}
               />
           }
         </div>
@@ -635,13 +671,27 @@ function ProductDetailModal2({
                 const r2 = (v: number) => Math.round(v * 100) / 100;
                 const fmt1 = (v: number) => v.toLocaleString('ru-RU', {minimumFractionDigits: 1, maximumFractionDigits: 1});
 
-                // Dynamic recalculation based on forecastDays
+                // Dynamic recalculation: запас на forecastDays дней после получения + срок доставки
                 const dayRate = f.forecast_day_matrix;
-                const dynStock = dayRate * (f.lead_time_days + forecastDays / 2) + f.ss_total;
+                const dynStock = dayRate * (f.lead_time_days + forecastDays) + f.ss_total;
                 const dynOrder = Math.max(0, Math.ceil(dynStock - item.qty));
+                const coverageDays = dayRate > 0 ? Math.round(item.qty / dayRate) : null;
 
                 const wBaseDir = f.w_season > f.w_base ? '↑' : f.w_season < f.w_base ? '↓' : '=';
                 const wBaseDirColor = f.w_season > f.w_base ? '#22c55e' : f.w_season < f.w_base ? '#f59e0b' : '#64748b';
+
+                // Trend: 30d vs 365d rate
+                const trendRatio = f.avg_day_365 > 0 ? f.avg_day_30 / f.avg_day_365 : 1;
+                const trendUp = trendRatio > 1.2;
+                const trendDown = trendRatio < 0.8;
+                const trendColor = trendUp ? '#22c55e' : trendDown ? '#ef4444' : '#94a3b8';
+                const trendLabel = trendUp ? `↑ +${((trendRatio - 1) * 100).toFixed(0)}%`
+                                 : trendDown ? `↓ −${((1 - trendRatio) * 100).toFixed(0)}%`
+                                 : '≈ норма';
+
+                // Stale forecast
+                const calcAge = Math.round((Date.now() - new Date(f.calc_date).getTime()) / 86400000);
+                const staleColor = calcAge > 14 ? '#ef4444' : calcAge > 7 ? '#f59e0b' : null;
 
                 return (
                   <div style={{background: '#0f172a', borderRadius: 10, padding: '16px', marginTop: 14}}>
@@ -650,7 +700,17 @@ function ProductDetailModal2({
                     <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 6}}>
                       <span style={{fontWeight: 600, fontSize: '0.88em', color: '#f1f5f9'}}>
                         Прогноз закупки
-                        <span style={{fontSize: '0.78em', fontWeight: 400, color: '#475569', marginLeft: 8}}>{f.calc_date} · продаж за год: {Math.round(f.total_net_sales_365)} шт.</span>
+                        <span style={{fontSize: '0.78em', fontWeight: 400, color: '#475569', marginLeft: 8}}>
+                          {f.calc_date}
+                          {calcAge > 3 && (
+                            <span style={{marginLeft: 5, padding: '0 5px', borderRadius: 3, fontSize: '0.88em',
+                              background: staleColor ? staleColor + '22' : 'transparent',
+                              color: staleColor || '#475569'}}>
+                              {calcAge} дн. назад{calcAge > 14 ? ' ⚠' : ''}
+                            </span>
+                          )}
+                          {' · '}продаж за год: {Math.round(f.total_net_sales_365)} шт.
+                        </span>
                       </span>
                       <div style={{display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap'}}>
                         <ClassBadge abc={f.abc_class} xyz={f.xyz_class}/>
@@ -661,8 +721,8 @@ function ProductDetailModal2({
                     {/* Demand metrics: 4 cards */}
                     <div style={{display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginBottom: 10}}>
                       {[
-                        {label: 'Ср. продажи', sub: 'в день (год)', val: `${fmt1(f.avg_day_365)} шт.`, color: '#94a3b8'},
-                        {label: 'Базовый', sub: 'в неделю (год)', val: `${fmt1(f.w_base)} шт.`, color: '#64748b'},
+                        {label: 'Ср./день', sub: 'за 365 дн.', val: `${fmt1(f.avg_day_365)} шт.`, color: '#94a3b8'},
+                        {label: 'Ср./день', sub: `за 30 дн. · ${trendLabel}`, val: `${fmt1(f.avg_day_30)} шт.`, color: trendColor},
                         {label: 'Сезонный', sub: `нед. ${new Date(f.calc_date).toLocaleDateString('ru-RU',{day:'numeric',month:'short'})}`, val: `${fmt1(f.w_season)} шт.`, color: wBaseDirColor},
                         {label: 'Прогноз', sub: 'в неделю итого', val: `${fmt1(f.w_forecast_final)} шт.`, color: '#60a5fa'},
                       ].map(c => (
@@ -675,50 +735,59 @@ function ProductDetailModal2({
                     </div>
 
                     {/* Explanation of base vs seasonal */}
-                    <div style={{fontSize: '0.74em', color: '#475569', background: '#0a1628', borderRadius: 7, padding: '8px 10px', marginBottom: 14, lineHeight: 1.5}}>
-                      <span style={{color: '#334155'}}>Базовый</span> = средние продажи за последний год × 7 дней.{' '}
-                      <span style={{color: '#334155'}}>Сезонный</span> = фактические продажи на этой / следующей неделе в 2024–2025 гг.{' '}
+                    <div style={{fontSize: '0.74em', color: '#475569', background: '#0a1628', borderRadius: 7, padding: '8px 10px', marginBottom: 14, lineHeight: 1.6}}>
+                      <span style={{color: '#64748b'}}>Базовый</span> = среднее за год × 7 дн.{' '}
+                      <span style={{color: '#64748b'}}>Сезонный</span> = факт. продажи на этой / следующей неделе в 2024–2025 гг.{' '}
+                      Множитель месяца: ×{f.k_month_clip.toFixed(2)}
+                      {f.k_month_clip !== 1 && <span style={{color: f.k_month_clip > 1 ? '#22c55e' : '#f59e0b'}}> ({f.k_month_clip > 1 ? '+' : ''}{((f.k_month_clip - 1) * 100).toFixed(0)}% от среднего)</span>}.{' '}
+                      {f.w_anom_adj > 0.1 && <span>Поправка на всплески: <span style={{color: '#f87171'}}>+{fmt1(f.w_anom_adj)} шт./нед.</span>{' '}</span>}
                       {f.w_season > f.w_base
                         ? <span style={{color: '#22c55e'}}>Сейчас активнее среднего — сезон.</span>
                         : f.w_season < f.w_base * 0.9
-                        ? <span style={{color: '#f59e0b'}}>Сейчас тише среднего — низкий сезон.</span>
-                        : <span style={{color: '#64748b'}}>Близко к среднему.</span>
+                        ? <span style={{color: '#f59e0b'}}>Сейчас тише среднего.</span>
+                        : <span style={{color: '#475569'}}>Близко к среднему.</span>
                       }
-                      {' '}Итог = 45% базовый + 55% сезонный{wBaseDir !== '=' && <span style={{color: wBaseDirColor}}> {wBaseDir}</span>}.
                     </div>
 
                     {/* Order horizon + recommendation */}
                     <div style={{background: '#0a1628', borderRadius: 8, padding: '12px 14px', marginBottom: 14}}>
-                      <div style={{display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap'}}>
-                        <span style={{fontSize: '0.8em', color: '#64748b'}}>Закупить на</span>
+                      <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap'}}>
+                        <span style={{fontSize: '0.8em', color: '#64748b'}}>Запас на</span>
                         <input
                           type="number" min={1} max={365}
                           value={forecastDays}
                           onChange={e => setForecastDays(Math.max(1, Math.min(365, Number(e.target.value) || 14)))}
                           style={{width: 60, padding: '4px 8px', borderRadius: 6, border: '1px solid #334155', background: '#1e293b', color: '#f1f5f9', fontSize: '0.9em', textAlign: 'center'}}
                         />
-                        <span style={{fontSize: '0.8em', color: '#64748b'}}>дней вперёд <span style={{color: '#1e293b'}}>(+ {f.lead_time_days} дн. доставки)</span></span>
+                        <span style={{fontSize: '0.8em', color: '#64748b'}}>дней после получения <span style={{color: '#475569'}}>(+ {f.lead_time_days} дн. доставки)</span></span>
+                        {coverageDays !== null && (
+                          <span style={{fontSize: '0.78em', color: '#475569'}}>
+                            · Текущий запас:{' '}
+                            <span style={{fontWeight: 700, color: coverageDays < f.lead_time_days ? '#ef4444' : coverageDays < forecastDays ? '#f59e0b' : '#22c55e'}}>
+                              {coverageDays} дн.
+                            </span>
+                            {coverageDays < f.lead_time_days && <span style={{color: '#ef4444'}}> ⚠</span>}
+                          </span>
+                        )}
                       </div>
                       <div style={{display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap'}}>
                         <div>
                           <div style={{fontSize: '0.68em', color: '#475569'}}>Нужно остатков</div>
                           <div style={{fontWeight: 600, color: '#94a3b8'}}>{fmt1(dynStock)} шт.</div>
+                          <div style={{fontSize: '0.6em', color: '#334155'}}>вкл. страховой {fmt1(f.ss_total)} шт.</div>
                         </div>
                         <div style={{color: '#1e293b', fontSize: '1.2em'}}>−</div>
                         <div>
                           <div style={{fontSize: '0.68em', color: '#475569'}}>Есть сейчас</div>
                           <div style={{fontWeight: 600, color: '#64748b'}}>{item.qty.toLocaleString('ru-RU')} шт.</div>
                         </div>
-                        <div style={{color: '#1e293b', fontSize: '1.2em'}}>+</div>
-                        <div>
-                          <div style={{fontSize: '0.68em', color: '#f59e0b'}}>Страховой запас</div>
-                          <div style={{fontWeight: 600, color: '#f59e0b'}}>{fmt1(f.ss_total)} шт.</div>
-                        </div>
                         <div style={{flex: 1}}/>
                         <div style={{textAlign: 'center', background: dynOrder > 0 ? '#052e16' : '#0f172a', borderRadius: 8, padding: '8px 16px', border: `1px solid ${dynOrder > 0 ? '#16a34a' : '#1e293b'}`}}>
                           <div style={{fontSize: '0.68em', color: '#475569'}}>Заказать</div>
                           <div style={{fontWeight: 800, fontSize: '1.7em', color: dynOrder > 0 ? '#22c55e' : '#334155', lineHeight: 1}}>{dynOrder}</div>
-                          <div style={{fontSize: '0.65em', color: '#475569'}}>шт.</div>
+                          <div style={{fontSize: '0.65em', color: '#475569'}}>
+                            шт.{dynOrder > 0 && item.purchase_price > 0 ? ` · ≈ ${(dynOrder * item.purchase_price).toLocaleString('ru-RU')} ₽` : ''}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -734,7 +803,7 @@ function ProductDetailModal2({
                           : <span style={{color: '#334155', marginLeft: 6, fontWeight: 400}}>пиков нет</span>
                         }
                       </div>
-                      <SeasonBars coefs={coefs} peak={f.peak_months}/>
+                      <SeasonBars coefs={coefs} peak={f.peak_months} currentMonth={new Date().getMonth() + 1}/>
                       {/* Week comparison 2024 vs 2025 */}
                       <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 8}}>
                         {[
@@ -1532,9 +1601,9 @@ export function App() {
                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8}}>
                   <span className="meta">{filteredRecs.length} позиций к заказу</span>
                   <span style={{fontSize: '0.78em', color: '#64748b'}}>
-                    <span style={{color: '#22c55e', fontWeight: 700}}>A</span>=топ 50%&nbsp;
-                    <span style={{color: '#eab308', fontWeight: 700}}>B</span>=30%&nbsp;
-                    <span style={{color: '#94a3b8', fontWeight: 700}}>C</span>=20%&nbsp;&nbsp;
+                    <span style={{color: '#22c55e', fontWeight: 700}}>A</span>=топ 70%&nbsp;
+                    <span style={{color: '#eab308', fontWeight: 700}}>B</span>=20%&nbsp;
+                    <span style={{color: '#94a3b8', fontWeight: 700}}>C</span>=10%&nbsp;&nbsp;
                     <span style={{color: '#22c55e', fontWeight: 700}}>X</span>=стабильный&nbsp;
                     <span style={{color: '#f59e0b', fontWeight: 700}}>Y</span>=умеренный&nbsp;
                     <span style={{color: '#ef4444', fontWeight: 700}}>Z</span>=нестабильный спрос
@@ -2037,7 +2106,7 @@ export function App() {
                   }}
                 >
                   <span style={{color: c2Path === '' ? '#fff' : '#94a3b8'}}>Все товары</span>
-                  <span style={{color: '#334155', fontSize: '0.78em'}}>99 275</span>
+                  <span style={{color: '#334155', fontSize: '0.78em'}}>{c2Total.toLocaleString('ru-RU')}</span>
                 </div>
 
                 {/* Tree nodes */}

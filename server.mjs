@@ -700,8 +700,11 @@ app.get('/api/catalog2/item/:code/forecast', (req, res) => {
     if (!row) return res.status(404).json({error: 'no forecast data'});
     try { row.peak_months = JSON.parse(row.peak_months || '[]'); } catch { row.peak_months = []; }
 
-    // Anomalous days: dates where net sales > mean + 3σ
-    const threshold = row.avg_day_365 + 3 * row.std_day_no_anom;
+    // Anomalous days: threshold uses sales-day mean (total/observed), not calendar rate (total/365)
+    const salesDayMean = row.observed_days_365 > 0
+      ? row.total_net_sales_365 / row.observed_days_365
+      : row.avg_day_365;
+    const threshold = salesDayMean + 3 * row.std_day_no_anom;
     if (threshold > 0 && row.observed_days_365 >= 5) {
       row.anomaly_dates = db.prepare(`
         SELECT sale_date,
