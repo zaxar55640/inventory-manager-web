@@ -553,7 +553,7 @@ function ProductDetailModal2({
       onClick={onClose}
     >
       <div
-        style={{background: '#1e293b', borderRadius: 14, padding: '24px 28px', width: '90%', maxWidth: 680, boxShadow: '0 12px 60px rgba(0,0,0,.6)', marginBottom: 40}}
+        style={{background: '#1e293b', borderRadius: 14, padding: '20px 24px', width: '96%', maxWidth: 1100, boxShadow: '0 12px 60px rgba(0,0,0,.6)', marginBottom: 40}}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -590,6 +590,9 @@ function ProductDetailModal2({
           ))}
         </div>
 
+        {/* Chart + forecast: two columns */}
+        <div style={{display: 'flex', gap: 16, alignItems: 'flex-start'}}>
+          <div style={{flex: 1, minWidth: 0}}>
         {/* Chart section */}
         <div style={{background: '#0f172a', borderRadius: 10, padding: '16px'}}>
           {/* Title + stats */}
@@ -657,7 +660,9 @@ function ProductDetailModal2({
               />
           }
         </div>
+          </div>{/* /chart column */}
 
+          <div style={{width: 420, flexShrink: 0}}>
         {/* Forecast section */}
         {forecastLoading
           ? <div style={{display: 'flex', alignItems: 'center', gap: 8, padding: '28px 0', justifyContent: 'center', color: '#475569', fontSize: '0.88em'}}>
@@ -856,6 +861,8 @@ function ProductDetailModal2({
                 Прогноз не рассчитан — нет продаж за последний год
               </div>
         }
+          </div>{/* /forecast column */}
+        </div>{/* /two-column flex */}
       </div>
     </div>
   );
