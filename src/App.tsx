@@ -60,8 +60,23 @@ type CatalogItem = {
 };
 type CatalogResponse = {items: CatalogItem[]; total: number; limit: number; offset: number; has_more: boolean};
 
+type Catalog2Item = {
+  id: number; item_code: string|null; item_name: string; barcode: string|null;
+  qty: number; reserve: number; retail_price: number; purchase_price: number;
+  parent_name: string|null; variant: string|null;
+  group_l0: string|null; group_l1: string|null; group_l2: string|null;
+  group_l3: string|null; group_l4: string|null; group_l5: string|null;
+  group_l6: string|null; group_l7: string|null; group_l8: string|null;
+  group_depth: number; group_full_path: string|null;
+};
+type C2TreeNode = {name: string; item_count: number};
+type C2TreeEntry = {children: C2TreeNode[]; directItems: number};
+type C2SalesSeries = {month: string; sales: number; returns: number};
+type C2SalesData = {series: C2SalesSeries[]; has_data: boolean};
+type Catalog2Response = {items: Catalog2Item[]; total: number; limit: number; offset: number; has_more: boolean};
+
 type CreateMode = 'single' | 'multi';
-type TabKey = 'create' | 'drafts' | 'orders' | 'nonLiquid' | 'decisions' | 'catalog';
+type TabKey = 'create' | 'drafts' | 'orders' | 'nonLiquid' | 'decisions' | 'catalog' | 'catalog2';
 
 const currency = new Intl.NumberFormat('ru-RU');
 
@@ -74,6 +89,7 @@ function getTabFromLocation(): TabKey {
   if (hash === '/orders' || hash === 'orders') return 'orders';
   if (hash === '/decisions' || hash === 'decisions') return 'decisions';
   if (hash === '/catalog' || hash === 'catalog') return 'catalog';
+  if (hash === '/catalog2' || hash === 'catalog2') return 'catalog2';
   return 'create';
 }
 
@@ -84,6 +100,7 @@ function navigateToTab(tab: TabKey) {
     orders: '#/orders',
     decisions: '#/decisions',
     catalog: '#/catalog',
+    catalog2: '#/catalog2',
     create: '#/',
   };
   window.location.hash = map[tab];
@@ -132,6 +149,182 @@ function ClassBadge({abc, xyz}: {abc: string; xyz: string}) {
       {abc && <span title={ABC_TIPS[abc] || abc} style={{background: abcColor[abc] || '#ccc', color: '#fff', borderRadius: 3, padding: '1px 5px', fontWeight: 700, cursor: 'help'}}>{abc}</span>}
       {xyz && <span title={XYZ_TIPS[xyz] || xyz} style={{background: xyzColor[xyz] || '#ccc', color: '#fff', borderRadius: 3, padding: '1px 5px', fontWeight: 700, cursor: 'help'}}>{xyz}</span>}
     </span>
+  );
+}
+
+// ── catalog2: sales bar chart ─────────────────────────────────────────────────
+
+function SalesBarChart({series}: {series: C2SalesSeries[]}) {
+  if (!series.length) {
+    return (
+      <div style={{textAlign: 'center', color: '#475569', padding: '32px 0', fontSize: '0.88em'}}>
+        Данных о продажах пока нет
+      </div>
+    );
+  }
+  const maxY = Math.max(...series.map(s => Math.max(s.sales, s.returns)), 1);
+  const W = 600, H = 180, PL = 38, PR = 8, PT = 10, PB = 30;
+  const pw = W - PL - PR, ph = H - PT - PB;
+  const slot = pw / series.length;
+  const bw = Math.max(3, slot * 0.33);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{width: '100%', height: 'auto', display: 'block'}}>
+      {[0, 0.5, 1].map(t => {
+        const y = PT + ph * (1 - t);
+        return (
+          <g key={t}>
+            <line x1={PL} y1={y} x2={W - PR} y2={y} stroke="#1e293b" strokeWidth={t === 0 ? 1 : 0.5}/>
+            <text x={PL - 3} y={y + 3.5} fontSize={8} textAnchor="end" fill="#475569">{Math.round(maxY * t)}</text>
+          </g>
+        );
+      })}
+      {series.map((s, i) => {
+        const cx = PL + slot * i + slot / 2;
+        const sh = (s.sales / maxY) * ph;
+        const rh = (s.returns / maxY) * ph;
+        return (
+          <g key={i}>
+            <rect x={cx - bw - 1} y={PT + ph - sh} width={bw} height={Math.max(sh, 0.5)} fill="#3b82f6" rx={1.5}>
+              <title>{s.month}: продажи {s.sales}</title>
+            </rect>
+            <rect x={cx + 1} y={PT + ph - rh} width={bw} height={Math.max(rh, 0.5)} fill="#ef4444" rx={1.5}>
+              <title>{s.month}: возвраты {s.returns}</title>
+            </rect>
+            <text x={cx} y={H - 6} fontSize={7} textAnchor="middle" fill="#475569">{s.month.slice(5)}</text>
+            {series.length <= 14 && s.sales > 0 && (
+              <text x={cx - bw / 2 - 0.5} y={PT + ph - sh - 2} fontSize={7} textAnchor="middle" fill="#93c5fd">{s.sales}</text>
+            )}
+          </g>
+        );
+      })}
+      <rect x={PL} y={PT + 2} width={7} height={5} fill="#3b82f6" rx={1}/>
+      <text x={PL + 9} y={PT + 7} fontSize={8} fill="#94a3b8">Продажи</text>
+      <rect x={PL + 57} y={PT + 2} width={7} height={5} fill="#ef4444" rx={1}/>
+      <text x={PL + 66} y={PT + 7} fontSize={8} fill="#94a3b8">Возвраты</text>
+    </svg>
+  );
+}
+
+// ── catalog2: product detail modal ────────────────────────────────────────────
+
+const C2_PRESETS = [
+  {label: '3 мес', months: 3},
+  {label: '6 мес', months: 6},
+  {label: '1 год', months: 12},
+  {label: '2024+', months: 0},
+];
+
+function ProductDetailModal2({
+  item, onClose, salesData, salesLoading, chartFrom, chartTo,
+  setChartFrom, setChartTo,
+}: {
+  item: Catalog2Item; onClose: () => void;
+  salesData: C2SalesData | null; salesLoading: boolean;
+  chartFrom: string; chartTo: string;
+  setChartFrom: (v: string) => void; setChartTo: (v: string) => void;
+}) {
+  const profit = item.retail_price - item.purchase_price;
+  const margin = item.retail_price > 0 ? (profit / item.retail_price * 100) : 0;
+  const pathParts = item.group_full_path ? item.group_full_path.split(' / ') : [];
+
+  function applyPreset(months: number) {
+    const now = new Date();
+    const to = now.toISOString().slice(0, 7);
+    if (months === 0) { setChartFrom('2024-01'); setChartTo(to); return; }
+    const from = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
+    setChartFrom(from.toISOString().slice(0, 7));
+    setChartTo(to);
+  }
+
+  const totalSales = (salesData?.series || []).reduce((a, s) => a + s.sales, 0);
+  const totalReturns = (salesData?.series || []).reduce((a, s) => a + s.returns, 0);
+
+  return (
+    <div
+      style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', zIndex: 2000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 40, overflowY: 'auto'}}
+      onClick={onClose}
+    >
+      <div
+        style={{background: '#1e293b', borderRadius: 14, padding: '24px 28px', width: '90%', maxWidth: 680, boxShadow: '0 12px 60px rgba(0,0,0,.6)', marginBottom: 40}}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 16}}>
+          <div style={{flex: 1, minWidth: 0}}>
+            <div style={{fontSize: '0.72em', color: '#475569', marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}} title={item.group_full_path || ''}>
+              {pathParts.slice(1).join(' › ')}
+            </div>
+            <div style={{fontWeight: 700, fontSize: '1.05em', color: '#f1f5f9', lineHeight: 1.3}}>{item.item_name}</div>
+            <div style={{display: 'flex', gap: 10, marginTop: 4, fontSize: '0.78em', color: '#64748b', flexWrap: 'wrap'}}>
+              {item.item_code && <span>Код: <span style={{fontFamily: 'monospace', color: '#94a3b8'}}>{item.item_code.trim()}</span></span>}
+              {item.barcode && <span>ШК: <span style={{fontFamily: 'monospace', color: '#94a3b8'}}>{item.barcode}</span></span>}
+              {item.variant && <span>Вариант: {item.variant}</span>}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{background: 'none', border: '1px solid #334155', borderRadius: 8, color: '#64748b', cursor: 'pointer', padding: '4px 12px', fontSize: '1em', flexShrink: 0}}
+          >✕</button>
+        </div>
+
+        {/* Info cards */}
+        <div style={{display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 20}}>
+          {[
+            {label: 'Остаток', value: item.qty > 0 ? item.qty.toLocaleString('ru-RU') + ' шт.' : '—', color: item.qty > 0 ? '#22c55e' : '#ef4444'},
+            {label: 'Резерв', value: item.reserve > 0 ? item.reserve.toLocaleString('ru-RU') : '—', color: '#f1f5f9'},
+            {label: 'Цена продажи', value: item.retail_price > 0 ? item.retail_price.toLocaleString('ru-RU') + ' ₽' : '—', color: '#f1f5f9'},
+            {label: `Маржа ${margin.toFixed(0)}%`, value: profit > 0 ? profit.toLocaleString('ru-RU') + ' ₽' : '—', color: margin > 30 ? '#22c55e' : margin > 10 ? '#f59e0b' : '#ef4444'},
+          ].map(({label, value, color}) => (
+            <div key={label} style={{background: '#0f172a', borderRadius: 8, padding: '10px 12px'}}>
+              <div style={{fontSize: '0.7em', color: '#475569', marginBottom: 3}}>{label}</div>
+              <div style={{fontWeight: 700, color, fontSize: '0.95em'}}>{value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Chart section */}
+        <div style={{background: '#0f172a', borderRadius: 10, padding: '16px'}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8}}>
+            <div style={{fontWeight: 600, fontSize: '0.88em', color: '#f1f5f9'}}>
+              Динамика продаж
+              {salesData?.has_data && (
+                <span style={{fontWeight: 400, color: '#64748b', marginLeft: 8, fontSize: '0.9em'}}>
+                  {totalSales} продаж · {totalReturns} возвратов
+                </span>
+              )}
+            </div>
+            <div style={{display: 'flex', gap: 4}}>
+              {C2_PRESETS.map(p => (
+                <button key={p.label} onClick={() => applyPreset(p.months)} style={{
+                  padding: '3px 8px', borderRadius: 5, border: '1px solid #334155', cursor: 'pointer',
+                  background: '#1e293b', color: '#94a3b8', fontSize: '0.75em',
+                }}>{p.label}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap'}}>
+            <label style={{display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.78em', color: '#64748b'}}>
+              От
+              <input type="month" value={chartFrom} onChange={e => setChartFrom(e.target.value)}
+                style={{background: '#1e293b', border: '1px solid #334155', borderRadius: 5, color: '#f1f5f9', padding: '3px 6px', fontSize: '0.9em'}}
+              />
+            </label>
+            <label style={{display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.78em', color: '#64748b'}}>
+              До
+              <input type="month" value={chartTo} onChange={e => setChartTo(e.target.value)}
+                style={{background: '#1e293b', border: '1px solid #334155', borderRadius: 5, color: '#f1f5f9', padding: '3px 6px', fontSize: '0.9em'}}
+              />
+            </label>
+          </div>
+          {salesLoading
+            ? <div style={{display: 'flex', alignItems: 'center', gap: 8, padding: '32px 0', justifyContent: 'center', color: '#475569', fontSize: '0.88em'}}>
+                <div className="spinner" style={{width: 16, height: 16}}/> Загрузка...
+              </div>
+            : <SalesBarChart series={salesData?.series || []} />
+          }
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -362,6 +555,22 @@ export function App() {
   const [catalogGroups, setCatalogGroups] = useState<string[]>([]);
   const CATALOG_LIMIT = 100;
 
+  // catalog2 (tree catalog from ping JSON)
+  const [c2Items, setC2Items] = useState<Catalog2Item[]>([]);
+  const [c2Total, setC2Total] = useState(0);
+  const [c2Offset, setC2Offset] = useState(0);
+  const [c2HasMore, setC2HasMore] = useState(false);
+  const [c2Loading, setC2Loading] = useState(false);
+  const [c2Search, setC2Search] = useState('');
+  const [c2Path, setC2Path] = useState('');
+  const [c2Expanded, setC2Expanded] = useState<Set<string>>(new Set());
+  const [c2TreeCache, setC2TreeCache] = useState<Map<string, C2TreeEntry>>(new Map());
+  const [c2Modal, setC2Modal] = useState<Catalog2Item | null>(null);
+  const [c2Sales, setC2Sales] = useState<C2SalesData | null>(null);
+  const [c2SalesLoading, setC2SalesLoading] = useState(false);
+  const [c2ChartFrom, setC2ChartFrom] = useState('2024-01');
+  const [c2ChartTo, setC2ChartTo] = useState(() => new Date().toISOString().slice(0, 7));
+
   // ── api helpers ─────────────────────────────────────────────────────────────
 
   async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -404,6 +613,57 @@ export function App() {
       console.error('loadCatalog failed', err);
       setCatalogItems([]); setCatalogTotal(0); setCatalogHasMore(false);
     } finally { setCatalogLoading(false); }
+  }
+
+  async function c2LoadChildren(path: string) {
+    try {
+      const qs = path ? `?path=${encodeURIComponent(path)}` : '';
+      const data = await fetchJSON<{children: C2TreeNode[]; direct_items: number}>(apiUrl(`/api/catalog2/children${qs}`));
+      setC2TreeCache(prev => new Map(prev).set(path, {children: data.children, directItems: data.direct_items}));
+    } catch (err) { console.error('c2LoadChildren', err); }
+  }
+
+  async function c2LoadItems(path: string, q: string, offset: number) {
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    if (q.trim()) params.set('q', q.trim());
+    params.set('limit', '50');
+    params.set('offset', String(offset));
+    setC2Loading(true);
+    try {
+      const data = await fetchJSON<Catalog2Response>(apiUrl(`/api/catalog2/items?${params}`));
+      setC2Items(Array.isArray(data?.items) ? data.items : []);
+      setC2Total(Number(data?.total ?? 0));
+      setC2Offset(Number(data?.offset ?? 0));
+      setC2HasMore(Boolean(data?.has_more));
+    } catch (err) {
+      console.error('c2LoadItems', err);
+      setC2Items([]); setC2Total(0); setC2HasMore(false);
+    } finally { setC2Loading(false); }
+  }
+
+  async function c2LoadSales(code: string, from: string, to: string) {
+    if (!code) return;
+    setC2SalesLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('from', from + '-01');
+      params.set('to', to + '-31');
+      const data = await fetchJSON<C2SalesData>(apiUrl(`/api/catalog2/item/${encodeURIComponent(code)}/sales?${params}`));
+      setC2Sales(data);
+    } catch { setC2Sales(null); }
+    finally { setC2SalesLoading(false); }
+  }
+
+  async function c2ToggleExpand(path: string) {
+    const isOpen = c2Expanded.has(path);
+    const next = new Set(c2Expanded);
+    if (isOpen) { next.delete(path); }
+    else {
+      next.add(path);
+      if (!c2TreeCache.has(path)) await c2LoadChildren(path);
+    }
+    setC2Expanded(next);
   }
 
   async function loadNonLiquidGroups() {
@@ -498,6 +758,10 @@ export function App() {
   useEffect(() => {
     if (tab === 'decisions') loadDecisions();
     if (tab === 'catalog') loadCatalog(catalogGroup, catalogSearch, catalogSupplier, catalogSortBy, catalogSortDir, 0);
+    if (tab === 'catalog2') {
+      if (!c2TreeCache.has('')) c2LoadChildren('');
+      c2LoadItems(c2Path, c2Search, 0);
+    }
   }, [tab]);
 
   useEffect(() => {
@@ -513,6 +777,19 @@ export function App() {
     if (tab !== 'catalog') return;
     loadCatalog(catalogGroup, catalogSearch, catalogSupplier, catalogSortBy, catalogSortDir, catalogOffset);
   }, [catalogOffset]);
+
+  // catalog2 effects
+  useEffect(() => {
+    if (tab !== 'catalog2') return;
+    const t = setTimeout(() => { setC2Offset(0); c2LoadItems(c2Path, c2Search, 0); }, 300);
+    return () => clearTimeout(t);
+  }, [c2Path, c2Search]);
+
+  useEffect(() => {
+    if (!c2Modal) return;
+    const code = c2Modal.item_code?.trim() || String(c2Modal.id);
+    c2LoadSales(code, c2ChartFrom, c2ChartTo);
+  }, [c2Modal, c2ChartFrom, c2ChartTo]);
 
   // ── draft actions ─────────────────────────────────────────────────────────
 
@@ -594,11 +871,43 @@ export function App() {
     return openOrder.items.slice(orderPage * ORDER_PAGE_SIZE, (orderPage + 1) * ORDER_PAGE_SIZE);
   }, [openOrder, orderPage]);
 
+  // catalog2 tree: build flat visible list from expanded state + cache
+  const c2VisibleNodes = useMemo(() => {
+    type VN = {path: string; name: string; depth: number; hasChildren: boolean; isExpanded: boolean; itemCount: number};
+    const result: VN[] = [];
+    function walk(parentPath: string, depth: number) {
+      const entry = c2TreeCache.get(parentPath);
+      if (!entry) return;
+      for (const node of entry.children) {
+        const path = parentPath ? `${parentPath} / ${node.name}` : node.name;
+        const isExpanded = c2Expanded.has(path);
+        const childEntry = c2TreeCache.get(path);
+        const hasChildren = !childEntry || childEntry.children.length > 0;
+        result.push({path, name: node.name, depth, hasChildren, isExpanded, itemCount: node.item_count});
+        if (isExpanded) walk(path, depth + 1);
+      }
+    }
+    walk('', 0);
+    return result;
+  }, [c2TreeCache, c2Expanded]);
+
   // ── render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="shell">
       {/* modals */}
+      {c2Modal && (
+        <ProductDetailModal2
+          item={c2Modal}
+          onClose={() => setC2Modal(null)}
+          salesData={c2Sales}
+          salesLoading={c2SalesLoading}
+          chartFrom={c2ChartFrom}
+          chartTo={c2ChartTo}
+          setChartFrom={setC2ChartFrom}
+          setChartTo={setC2ChartTo}
+        />
+      )}
       {explainRow && <ExplainModal row={explainRow} onClose={() => setExplainRow(null)} />}
       {editQtyState && (
         <EditQtyModal
@@ -625,6 +934,7 @@ export function App() {
           <button className={tab === 'drafts' ? 'tab active' : 'tab'} onClick={() => { setTab('drafts'); navigateToTab('drafts'); }}>Драфты</button>
           <button className={tab === 'orders' ? 'tab active' : 'tab'} onClick={() => { setTab('orders'); navigateToTab('orders'); }}>Заявки</button>
           <button className={tab === 'catalog' ? 'tab active' : 'tab'} onClick={() => { setTab('catalog'); navigateToTab('catalog'); }}>Товары</button>
+          <button className={tab === 'catalog2' ? 'tab active' : 'tab'} onClick={() => { setTab('catalog2'); navigateToTab('catalog2'); }}>Каталог</button>
           <button className={tab === 'nonLiquid' ? 'tab active' : 'tab'} onClick={() => { setTab('nonLiquid'); navigateToTab('nonLiquid'); }}>Неликвиды</button>
           <button className={tab === 'decisions' ? 'tab active' : 'tab'} onClick={() => { setTab('decisions'); navigateToTab('decisions'); }}>Решения менеджеров</button>
         </div>
@@ -1147,6 +1457,188 @@ export function App() {
               </table>
             </div></div>
           </section>
+        )}
+
+        {/* ── CATALOG2 TAB ─────────────────────────────────────────────── */}
+        {tab === 'catalog2' && (
+          <div style={{display: 'flex', height: '100%', overflow: 'hidden'}}>
+
+            {/* Left tree panel */}
+            <div style={{
+              width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column',
+              background: '#0a1628', borderRight: '1px solid #1e293b', overflow: 'hidden',
+            }}>
+              <div style={{padding: '12px 12px 8px', borderBottom: '1px solid #1e293b', flexShrink: 0}}>
+                <div style={{fontSize: '0.68em', color: '#334155', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700}}>Группы товаров</div>
+              </div>
+              <div style={{overflowY: 'auto', flex: 1, padding: '6px 4px'}}>
+                {/* All items root */}
+                <div
+                  onClick={() => { setC2Path(''); }}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '5px 8px', borderRadius: 5, cursor: 'pointer', marginBottom: 2,
+                    background: c2Path === '' ? '#1d4ed8' : 'transparent',
+                    fontSize: '0.82em', fontWeight: 600,
+                  }}
+                >
+                  <span style={{color: c2Path === '' ? '#fff' : '#94a3b8'}}>Все товары</span>
+                  <span style={{color: '#334155', fontSize: '0.78em'}}>99 275</span>
+                </div>
+
+                {/* Tree nodes */}
+                {!c2TreeCache.has('') && (
+                  <div style={{padding: '16px 8px', color: '#334155', fontSize: '0.8em', textAlign: 'center'}}>Загрузка…</div>
+                )}
+                {c2VisibleNodes.map(node => (
+                  <div key={node.path} style={{paddingLeft: node.depth * 14}}>
+                    <div
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 3,
+                        padding: '4px 8px', borderRadius: 5, cursor: 'pointer',
+                        background: c2Path === node.path ? '#1d4ed8' : 'transparent',
+                        fontSize: '0.8em',
+                      }}
+                      onClick={() => {
+                        setC2Path(node.path);
+                        if (node.hasChildren) c2ToggleExpand(node.path);
+                      }}
+                    >
+                      <span style={{width: 12, color: '#334155', fontSize: '0.85em', flexShrink: 0}}>
+                        {node.hasChildren ? (node.isExpanded ? '▾' : '▸') : '·'}
+                      </span>
+                      <span style={{flex: 1, color: c2Path === node.path ? '#fff' : '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={node.name}>
+                        {node.name}
+                      </span>
+                      <span style={{color: '#334155', fontSize: '0.75em', flexShrink: 0, marginLeft: 4}}>{node.itemCount.toLocaleString('ru-RU')}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Right: product list */}
+            <div style={{flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden'}}>
+              {/* Toolbar */}
+              <div style={{padding: '10px 14px 8px', borderBottom: '1px solid #1e293b', background: '#0a1628', flexShrink: 0}}>
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 6}}>
+                  {/* Breadcrumb */}
+                  <div style={{display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center', fontSize: '0.78em', color: '#475569', maxWidth: '60%'}}>
+                    <span
+                      style={{cursor: 'pointer', color: c2Path === '' ? '#f1f5f9' : '#3b82f6', fontWeight: c2Path === '' ? 700 : 400}}
+                      onClick={() => setC2Path('')}
+                    >Все</span>
+                    {c2Path.split(' / ').filter(Boolean).map((part, i, arr) => {
+                      const pathTo = c2Path.split(' / ').slice(0, i + 1).join(' / ');
+                      const isLast = i === arr.length - 1;
+                      return (
+                        <span key={pathTo} style={{display: 'flex', alignItems: 'center', gap: 2}}>
+                          <span style={{color: '#1e293b'}}>/</span>
+                          <span
+                            style={{cursor: isLast ? 'default' : 'pointer', color: isLast ? '#f1f5f9' : '#3b82f6', fontWeight: isLast ? 600 : 400, whiteSpace: 'nowrap'}}
+                            onClick={() => !isLast && setC2Path(pathTo)}
+                          >{part}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <span style={{color: '#334155', fontSize: '0.78em', flexShrink: 0}}>
+                    {c2Total.toLocaleString('ru-RU')} товаров
+                  </span>
+                </div>
+                <input
+                  style={{
+                    width: '100%', boxSizing: 'border-box',
+                    background: '#1e293b', border: '1px solid #334155', borderRadius: 7,
+                    color: '#f1f5f9', padding: '6px 12px', fontSize: '0.84em',
+                    outline: 'none',
+                  }}
+                  placeholder="Поиск по названию, коду, штрихкоду…"
+                  value={c2Search}
+                  onChange={e => setC2Search(e.target.value)}
+                />
+              </div>
+
+              {/* Table */}
+              <div style={{flex: 1, overflowY: 'auto', position: 'relative'}}>
+                {c2Loading && (
+                  <div style={{position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(10,22,40,.6)', zIndex: 5}}>
+                    <div className="spinner" />&nbsp;<span style={{color: '#64748b', fontSize: '0.88em'}}>Загрузка…</span>
+                  </div>
+                )}
+                <table style={{width: '100%', borderCollapse: 'collapse', fontSize: '0.83em'}}>
+                  <thead>
+                    <tr style={{background: '#0a1628', position: 'sticky', top: 0, zIndex: 4}}>
+                      {(['Название', 'Код / ШК', 'Подгруппа', 'Остаток', 'Цена прод.', 'Цена закуп.'] as string[]).map((h, i) => (
+                        <th key={h} style={{
+                          padding: '7px 10px', textAlign: i >= 3 ? 'right' : 'left',
+                          color: '#475569', fontWeight: 600, fontSize: '0.8em',
+                          borderBottom: '1px solid #1e293b', whiteSpace: 'nowrap',
+                        }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {c2Items.map(item => (
+                      <tr
+                        key={item.id}
+                        onClick={() => setC2Modal(item)}
+                        style={{cursor: 'pointer', borderBottom: '1px solid #0f172a', transition: 'background .1s'}}
+                        onMouseEnter={e => ((e.currentTarget as HTMLElement).style.background = '#1e293b')}
+                        onMouseLeave={e => ((e.currentTarget as HTMLElement).style.background = '')}
+                      >
+                        <td style={{padding: '7px 10px', maxWidth: 340, color: '#e2e8f0'}}>
+                          <div style={{fontWeight: 500, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.item_name}</div>
+                        </td>
+                        <td style={{padding: '7px 10px', fontFamily: 'monospace', color: '#475569', fontSize: '0.85em', whiteSpace: 'nowrap'}}>
+                          {item.item_code?.trim() && <div>{item.item_code.trim()}</div>}
+                          {item.barcode && <div style={{color: '#334155'}}>{item.barcode}</div>}
+                        </td>
+                        <td style={{padding: '7px 10px', color: '#64748b', whiteSpace: 'nowrap', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis'}}>
+                          {item.parent_name || '—'}
+                        </td>
+                        <td style={{padding: '7px 10px', textAlign: 'right', fontWeight: 600, color: item.qty > 0 ? '#22c55e' : '#334155'}}>
+                          {item.qty > 0 ? item.qty.toLocaleString('ru-RU') : '—'}
+                        </td>
+                        <td style={{padding: '7px 10px', textAlign: 'right', color: '#e2e8f0'}}>
+                          {item.retail_price > 0 ? item.retail_price.toLocaleString('ru-RU') + ' ₽' : '—'}
+                        </td>
+                        <td style={{padding: '7px 10px', textAlign: 'right', color: '#64748b'}}>
+                          {item.purchase_price > 0 ? item.purchase_price.toLocaleString('ru-RU') + ' ₽' : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                    {!c2Loading && !c2Items.length && (
+                      <tr>
+                        <td colSpan={6} style={{padding: '40px 16px', textAlign: 'center', color: '#334155'}}>Товары не найдены</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '7px 14px', borderTop: '1px solid #1e293b', background: '#0a1628',
+                fontSize: '0.8em', flexShrink: 0,
+              }}>
+                <button
+                  className="ghost-btn"
+                  disabled={c2Offset === 0 || c2Loading}
+                  onClick={() => { const o = Math.max(0, c2Offset - 50); setC2Offset(o); c2LoadItems(c2Path, c2Search, o); }}
+                >← Назад</button>
+                <span style={{color: '#475569'}}>
+                  {c2Total > 0 ? `${(c2Offset + 1).toLocaleString('ru-RU')}–${Math.min(c2Offset + c2Items.length, c2Total).toLocaleString('ru-RU')} из ${c2Total.toLocaleString('ru-RU')}` : '—'}
+                </span>
+                <button
+                  className="ghost-btn"
+                  disabled={!c2HasMore || c2Loading}
+                  onClick={() => { const o = c2Offset + 50; setC2Offset(o); c2LoadItems(c2Path, c2Search, o); }}
+                >Вперёд →</button>
+              </div>
+            </div>
+          </div>
         )}
 
       </main>

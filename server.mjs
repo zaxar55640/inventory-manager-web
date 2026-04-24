@@ -64,30 +64,72 @@ app.patch('/api/suppliers/:name/settings', (req, res) => {
   res.json({ok: true});
 });
 
+// Two-level dedup: first per (store, sku_name) to collapse duplicate script runs,
+// then aggregate across stores. This prevents inflated available_qty and to_order.
+function prDedupSql(extraWhere) {
+  return `
+    SELECT MIN(id) AS id, sku_name,
+           MAX(item_ref) AS item_ref, MAX(norm_name) AS norm_name,
+           MAX(supplier_name) AS supplier_name,
+           SUM(available_qty) AS available_qty, SUM(in_transit_qty) AS in_transit_qty,
+           SUM(to_order) AS to_order, MAX(recommended_stock) AS recommended_stock,
+           MAX(demand_mode) AS demand_mode, MAX(abc_class) AS abc_class,
+           MAX(xyz_class) AS xyz_class, MAX(coverage_days) AS coverage_days,
+           MAX(coverage_source) AS coverage_source, MAX(system_note) AS system_note,
+           MAX(lead_time_days) AS lead_time_days, MAX(order_cycle_days) AS order_cycle_days,
+           MAX(cycle_stock) AS cycle_stock, MAX(safety_stock) AS safety_stock,
+           MAX(pre_season_flag) AS pre_season_flag, MAX(peak_months) AS peak_months,
+           MAX(explain_text) AS explain_text, MIN(status_ranked) AS status_ranked
+    FROM (
+      SELECT MIN(id) AS id, sku_name, store,
+             MAX(item_ref) AS item_ref, MAX(norm_name) AS norm_name,
+             MAX(supplier_name) AS supplier_name,
+             MAX(available_qty) AS available_qty, MAX(in_transit_qty) AS in_transit_qty,
+             MAX(to_order) AS to_order, MAX(recommended_stock) AS recommended_stock,
+             MAX(demand_mode) AS demand_mode, MAX(abc_class) AS abc_class,
+             MAX(xyz_class) AS xyz_class, MAX(coverage_days) AS coverage_days,
+             MAX(coverage_source) AS coverage_source, MAX(system_note) AS system_note,
+             MAX(lead_time_days) AS lead_time_days, MAX(order_cycle_days) AS order_cycle_days,
+             MAX(cycle_stock) AS cycle_stock, MAX(safety_stock) AS safety_stock,
+             MAX(pre_season_flag) AS pre_season_flag, MAX(peak_months) AS peak_months,
+             MAX(explain_text) AS explain_text,
+             MIN(CASE status
+               WHEN 'urgent_order'                 THEN '1_urgent_order'
+               WHEN 'pre_season_order'             THEN '2_pre_season_order'
+               WHEN 'order'                        THEN '3_order'
+               WHEN 'limited_history_manual_check' THEN '4_limited_history_manual_check'
+               WHEN 'new_item_manual_check'        THEN '5_new_item_manual_check'
+               WHEN 'ok'                           THEN '6_ok'
+               WHEN 'overstock_risk'               THEN '7_overstock_risk'
+               ELSE '8_' || COALESCE(status,'')
+             END) AS status_ranked
+      FROM purchase_recommendations
+      WHERE calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
+        ${extraWhere ? 'AND ' + extraWhere : ''}
+      GROUP BY sku_name, store
+    )
+    GROUP BY sku_name
+  `;
+}
+
+const PR_SELECT = `
+  SELECT r.id, r.supplier_name, r.sku_name, r.item_ref, r.norm_name,
+         r.available_qty, r.in_transit_qty, r.to_order, r.recommended_stock,
+         r.demand_mode, r.abc_class, r.xyz_class,
+         r.coverage_days, r.coverage_source, r.system_note,
+         r.lead_time_days, r.order_cycle_days,
+         r.cycle_stock, r.safety_stock,
+         r.pre_season_flag, r.peak_months, r.explain_text,
+         SUBSTR(r.status_ranked, 3) AS status
+  FROM (`;
+
 app.get('/api/recommendations', (req, res) => {
   const supplier = String(req.query.supplier || '');
   const rows = db.prepare(`
-    SELECT id, supplier_name, sku_name, item_ref, norm_name,
-           available_qty, in_transit_qty, to_order, recommended_stock,
-           demand_mode, abc_class, xyz_class,
-           coverage_days, coverage_source, system_note,
-           lead_time_days, order_cycle_days,
-           cycle_stock, safety_stock,
-           pre_season_flag, peak_months, explain_text, status
-    FROM purchase_recommendations
-    WHERE calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
-      AND supplier_name = ?
-      AND to_order > 0
-    ORDER BY
-      CASE status
-        WHEN 'urgent_order'    THEN 1
-        WHEN 'pre_season_order' THEN 2
-        WHEN 'order'           THEN 3
-        WHEN 'limited_history_manual_check' THEN 4
-        ELSE 5
-      END ASC,
-      to_order DESC,
-      sku_name ASC
+    ${PR_SELECT}
+      ${prDedupSql('supplier_name = ? AND to_order > 0')}
+    ) r
+    ORDER BY r.status_ranked ASC, r.to_order DESC, r.sku_name ASC
   `).all(supplier);
   res.json(rows);
 });
@@ -96,17 +138,10 @@ app.get('/api/search', (req, res) => {
   const q = `%${String(req.query.q || '').trim()}%`;
   if (q === '%%') return res.json([]);
   const rows = db.prepare(`
-    SELECT id, supplier_name, sku_name, item_ref, norm_name,
-           available_qty, in_transit_qty, to_order, recommended_stock,
-           demand_mode, abc_class, xyz_class,
-           coverage_days, coverage_source, system_note,
-           lead_time_days, order_cycle_days,
-           cycle_stock, safety_stock,
-           pre_season_flag, peak_months, explain_text, status
-    FROM purchase_recommendations
-    WHERE calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
-      AND (sku_name LIKE ? OR norm_name LIKE ? OR item_ref LIKE ?)
-    ORDER BY to_order DESC, sku_name ASC
+    ${PR_SELECT}
+      ${prDedupSql('(sku_name LIKE ? OR norm_name LIKE ? OR item_ref LIKE ?)')}
+    ) r
+    ORDER BY r.to_order DESC, r.sku_name ASC
     LIMIT 30
   `).all(q, q, q);
   res.json(rows);
@@ -437,46 +472,27 @@ app.get('/api/products-catalog', (req, res) => {
 
   const where = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
 
-  // Dedup purchase_recommendations by sku_name (multiple stores / multiple runs same day)
+  // Two-level dedup: collapse duplicate script runs per (store, sku_name), then sum across stores
   const baseSql = `
-    FROM (
-      SELECT sku_name, MAX(item_ref) AS item_ref,
-             MAX(supplier_name) AS supplier_name,
-             SUM(to_order)      AS to_order,
-             SUM(available_qty) AS available_qty,
-             MIN(CASE status
-               WHEN 'urgent_order'                THEN '1_urgent_order'
-               WHEN 'pre_season_order'            THEN '2_pre_season_order'
-               WHEN 'order'                       THEN '3_order'
-               WHEN 'limited_history_manual_check'THEN '4_limited_history_manual_check'
-               WHEN 'new_item_manual_check'       THEN '5_new_item_manual_check'
-               WHEN 'ok'                          THEN '6_ok'
-               WHEN 'overstock_risk'              THEN '7_overstock_risk'
-               ELSE '8_' || COALESCE(status,'')
-             END)               AS status_ranked,
-             MAX(pre_season_flag) AS pre_season_flag,
-             MAX(peak_months)   AS peak_months,
-             MAX(abc_class)     AS abc_class,
-             MAX(xyz_class)     AS xyz_class,
-             MAX(explain_text)  AS explain_text
-      FROM purchase_recommendations
-      WHERE calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
-      GROUP BY sku_name
-    ) r
+    FROM (${prDedupSql('')}) r
     LEFT JOIN products p ON p.sku_name = r.sku_name
     LEFT JOIN (
       SELECT sku_name,
-             MIN(COALESCE(NULLIF(subgroup,''), NULLIF(subgroup_ref,''), 'Без группы')) AS subgroup
+             COALESCE(MAX(NULLIF(subgroup,'')), MAX(NULLIF(subgroup_ref,'')), 'Без группы') AS subgroup
       FROM stock_snapshots
       WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM stock_snapshots)
       GROUP BY sku_name
     ) ss ON ss.sku_name = r.sku_name
     LEFT JOIN (
-      SELECT sku_name, last_sale_date,
-             CAST(julianday('now') - julianday(last_sale_date) AS INTEGER) AS days_since_last_sale,
-             is_seasonal, season_note, nlq_score
+      SELECT sku_name,
+             MAX(last_sale_date) AS last_sale_date,
+             CAST(julianday('now') - julianday(MAX(last_sale_date)) AS INTEGER) AS days_since_last_sale,
+             MAX(is_seasonal) AS is_seasonal,
+             MAX(season_note) AS season_note,
+             MAX(nlq_score) AS nlq_score
       FROM non_liquid_snapshot
       WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM non_liquid_snapshot)
+      GROUP BY sku_name
     ) nl ON nl.sku_name = r.sku_name
     ${where}
   `;
@@ -514,6 +530,145 @@ app.get('/api/products-catalog/groups', (_req, res) => {
       ORDER BY subgroup ASC
     `).all();
     res.json(rows.map(r => r.subgroup));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── catalog2: new product catalog from ping JSON ──────────────────────────────
+
+// Build WHERE clause for a given path array (group_l0, group_l1, ...)
+function catalogPathWhere(pathParts) {
+  if (!pathParts.length) return { where: '', params: [] };
+  const clauses = pathParts.map((_, i) => `group_l${i} = ?`);
+  return { where: clauses.join(' AND '), params: pathParts };
+}
+
+// Returns immediate child group names + item count for each, at the given path depth
+app.get('/api/catalog2/children', (req, res) => {
+  try {
+    const pathStr = String(req.query.path || '');
+    const pathParts = pathStr ? pathStr.split(' / ') : [];
+    const depth = pathParts.length;
+    const childCol = `group_l${depth}`;
+    if (depth > 8) return res.json({ children: [], direct_items: 0 });
+
+    const { where: pw, params: pp } = catalogPathWhere(pathParts);
+    const baseWhere = pw ? `${pw} AND ${childCol} IS NOT NULL` : `${childCol} IS NOT NULL`;
+
+    const children = db.prepare(`
+      SELECT ${childCol} AS name, COUNT(*) AS item_count
+      FROM catalog_products
+      WHERE ${baseWhere}
+      GROUP BY ${childCol}
+      ORDER BY ${childCol} ASC
+    `).all(...pp);
+
+    // Count direct items (leaves) exactly at this path depth
+    const directWhere = pw ? `${pw} AND group_depth = ${depth}` : `group_depth = ${depth}`;
+    const direct = db.prepare(`SELECT COUNT(*) AS cnt FROM catalog_products WHERE ${directWhere}`).get(...pp);
+
+    res.json({ children, direct_items: direct?.cnt ?? 0 });
+  } catch (err) {
+    console.error('/api/catalog2/children', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Returns paginated products at a given path prefix (all descendants) or search query
+app.get('/api/catalog2/items', (req, res) => {
+  try {
+    const pathStr = String(req.query.path || '');
+    const pathParts = pathStr ? pathStr.split(' / ') : [];
+    const q       = String(req.query.q || '').trim();
+    const limit   = Math.min(200, Math.max(1, Number(req.query.limit  || 50)));
+    const offset  = Math.max(0, Number(req.query.offset || 0));
+    const sortBy  = String(req.query.sort_by  || 'item_name');
+    const sortDir = req.query.sort_dir === 'desc' ? 'DESC' : 'ASC';
+
+    const allowedSort = new Set(['item_name','item_code','qty','retail_price','purchase_price','parent_name']);
+    const col = allowedSort.has(sortBy) ? sortBy : 'item_name';
+
+    const conditions = [];
+    const params = [];
+
+    if (pathParts.length) {
+      const { where: pw, params: pp } = catalogPathWhere(pathParts);
+      conditions.push(pw);
+      params.push(...pp);
+    }
+    if (q) {
+      conditions.push(`(item_name LIKE ? OR item_code LIKE ? OR barcode = ?)`);
+      params.push(`%${q}%`, `%${q}%`, q);
+    }
+
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+
+    const total = db.prepare(`SELECT COUNT(*) AS cnt FROM catalog_products ${where}`).get(...params).cnt;
+    const items = db.prepare(`
+      SELECT id, item_code, item_name, barcode, qty, reserve,
+             retail_price, purchase_price, parent_name, variant,
+             group_l0, group_l1, group_l2, group_l3, group_l4,
+             group_l5, group_l6, group_l7, group_l8,
+             group_depth, group_full_path
+      FROM catalog_products
+      ${where}
+      ORDER BY ${col} ${sortDir}
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset);
+
+    res.json({ items, total, limit, offset, has_more: offset + items.length < total });
+  } catch (err) {
+    console.error('/api/catalog2/items', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Returns single product detail by id or item_code
+app.get('/api/catalog2/item/:code', (req, res) => {
+  try {
+    const code = req.params.code;
+    const row = db.prepare(`SELECT * FROM catalog_products WHERE item_code = ? LIMIT 1`).get(code)
+             || db.prepare(`SELECT * FROM catalog_products WHERE id = ? LIMIT 1`).get(code);
+    if (!row) return res.status(404).json({ error: 'not found' });
+    res.json(row);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Sales chart data: aggregated by month from catalog_sales
+// Returns stub empty series when no data
+app.get('/api/catalog2/item/:code/sales', (req, res) => {
+  try {
+    const code  = req.params.code;
+    const from  = String(req.query.from || '2024-01-01');
+    const to    = String(req.query.to   || new Date().toISOString().slice(0, 10));
+
+    const rows = db.prepare(`
+      SELECT strftime('%Y-%m', sale_date) AS month,
+             SUM(sales_qty)  AS sales,
+             SUM(return_qty) AS returns
+      FROM catalog_sales
+      WHERE item_code = ? AND sale_date >= ? AND sale_date <= ?
+      GROUP BY month
+      ORDER BY month ASC
+    `).all(code, from, to);
+
+    res.json({ series: rows, has_data: rows.length > 0 });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Import sales records (batch insert)
+app.post('/api/catalog2/sales', (req, res) => {
+  try {
+    const records = req.body;
+    if (!Array.isArray(records)) return res.status(400).json({ error: 'body must be array' });
+    const insert = db.prepare(`
+      INSERT INTO catalog_sales (sale_date, store, item_code, sales_qty, return_qty)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    const insertMany = db.transaction((rows) => {
+      for (const r of rows) insert.run(r.date, r.store || '', r.itemCode, r.salesQty ?? 0, r.returnQty ?? 0);
+    });
+    insertMany(records);
+    res.json({ ok: true, inserted: records.length });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
