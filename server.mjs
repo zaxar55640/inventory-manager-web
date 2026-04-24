@@ -614,12 +614,14 @@ app.get('/api/catalog2/items', (req, res) => {
       const words = q.toLowerCase().trim().split(/\s+/).filter(Boolean);
       if (words.length === 1) {
         const pat = `%${words[0]}%`;
-        conditions.push(`(jslower(cp.item_name) LIKE ? OR jslower(cp.item_code) LIKE ? OR cp.barcode = ?)`);
-        params.push(pat, pat, q);
+        conditions.push(`(jslower(cp.item_name) LIKE ? OR jslower(cp.item_code) LIKE ? OR jslower(cp.parent_name) LIKE ? OR cp.barcode = ?)`);
+        params.push(pat, pat, pat, q);
       } else {
-        const nameConds = words.map(() => `jslower(cp.item_name) LIKE ?`).join(' AND ');
-        conditions.push(`((${nameConds}) OR jslower(cp.item_code) LIKE ? OR cp.barcode = ?)`);
-        params.push(...words.map(w => `%${w}%`), `%${words.join('%')}%`, q);
+        // All words must appear in name OR parent_name; also try code
+        const nameConds  = words.map(() => `jslower(cp.item_name) LIKE ?`).join(' AND ');
+        const pnameConds = words.map(() => `jslower(cp.parent_name) LIKE ?`).join(' AND ');
+        conditions.push(`((${nameConds}) OR (${pnameConds}) OR jslower(cp.item_code) LIKE ? OR cp.barcode = ?)`);
+        params.push(...words.map(w => `%${w}%`), ...words.map(w => `%${w}%`), `%${words.join('%')}%`, q);
       }
     }
     if (req.query.has_stock === '1') {
