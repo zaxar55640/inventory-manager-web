@@ -798,8 +798,7 @@ export function App() {
   const [c2ChartFrom, setC2ChartFrom] = useState('2024-01');
   const [c2ChartTo, setC2ChartTo] = useState(() => new Date().toISOString().slice(0, 7));
   const [c2ChartGran, setC2ChartGran] = useState<C2Gran>('month');
-  const [c2SortBy, setC2SortBy] = useState('item_name');
-  const [c2SortDir, setC2SortDir] = useState<'asc'|'desc'>('asc');
+  const [c2Sort, setC2Sort] = useState<{key: string; dir: 'asc'|'desc'}[]>([{key: 'item_name', dir: 'asc'}]);
   const [c2TreeSearch, setC2TreeSearch] = useState('');
   const [c2TreeSearchResults, setC2TreeSearchResults] = useState<C2GroupResult[]>([]);
 
@@ -855,14 +854,16 @@ export function App() {
     } catch (err) { console.error('c2LoadChildren', err); }
   }
 
-  async function c2LoadItems(path: string, q: string, offset: number, sortBy = c2SortBy, sortDir = c2SortDir) {
+  async function c2LoadItems(path: string, q: string, offset: number, sort = c2Sort) {
     const params = new URLSearchParams();
     if (path) params.set('path', path);
     if (q.trim()) params.set('q', q.trim());
     params.set('limit', '50');
     params.set('offset', String(offset));
-    params.set('sort_by', sortBy);
-    params.set('sort_dir', sortDir);
+    if (sort.length) {
+      params.set('sort_by', sort.map(s => s.key).join(','));
+      params.set('sort_dir', sort.map(s => s.dir).join(','));
+    }
     setC2Loading(true);
     try {
       const data = await fetchJSON<Catalog2Response>(apiUrl(`/api/catalog2/items?${params}`));
@@ -1026,7 +1027,7 @@ export function App() {
     if (tab !== 'catalog2') return;
     const t = setTimeout(() => { setC2Offset(0); c2LoadItems(c2Path, c2Search, 0); }, 300);
     return () => clearTimeout(t);
-  }, [c2Path, c2Search, c2SortBy, c2SortDir]);
+  }, [c2Path, c2Search, c2Sort]);
 
   useEffect(() => {
     const t = setTimeout(() => c2SearchGroups(c2TreeSearch), 300);
@@ -1856,17 +1857,30 @@ export function App() {
                     {c2Total.toLocaleString('ru-RU')} товаров
                   </span>
                 </div>
-                <input
-                  style={{
-                    width: '100%', boxSizing: 'border-box',
-                    background: '#1e293b', border: '1px solid #334155', borderRadius: 7,
-                    color: '#f1f5f9', padding: '6px 12px', fontSize: '0.84em',
-                    outline: 'none',
-                  }}
-                  placeholder="Поиск по названию, коду, штрихкоду…"
-                  value={c2Search}
-                  onChange={e => setC2Search(e.target.value)}
-                />
+                <div style={{display: 'flex', gap: 6, alignItems: 'center'}}>
+                  <input
+                    style={{
+                      flex: 1, boxSizing: 'border-box',
+                      background: '#1e293b', border: '1px solid #334155', borderRadius: 7,
+                      color: '#f1f5f9', padding: '6px 12px', fontSize: '0.84em',
+                      outline: 'none',
+                    }}
+                    placeholder="Поиск по названию, коду, штрихкоду…"
+                    value={c2Search}
+                    onChange={e => setC2Search(e.target.value)}
+                  />
+                  {c2Sort.length > 1 && (
+                    <button
+                      onClick={() => { setC2Sort([{key: 'item_name', dir: 'asc'}]); setC2Offset(0); }}
+                      title="Сбросить сортировку"
+                      style={{
+                        flexShrink: 0, padding: '5px 9px', background: '#1e293b',
+                        border: '1px solid #334155', borderRadius: 7, color: '#64748b',
+                        cursor: 'pointer', fontSize: '0.78em', whiteSpace: 'nowrap',
+                      }}
+                    >✕ сорт.</button>
+                  )}
+                </div>
               </div>
 
               {/* Table */}
@@ -1888,25 +1902,39 @@ export function App() {
                         {label: 'Цена закуп.', key: 'purchase_price', right: true},
                         {label: 'Посл. продажа', key: 'last_sale_date', right: true},
                       ] as {label:string; key:string|null; right:boolean}[]).map(col => {
-                        const active = col.key && c2SortBy === col.key;
+                        const sortIdx = col.key ? c2Sort.findIndex(s => s.key === col.key) : -1;
+                        const sortSpec = sortIdx >= 0 ? c2Sort[sortIdx] : null;
                         return (
                           <th
                             key={col.label}
+                            title={col.key ? (sortSpec ? 'Кликните чтобы изменить направление / убрать сортировку' : 'Кликните чтобы добавить в сортировку') : undefined}
                             onClick={col.key ? () => {
-                              if (c2SortBy === col.key) setC2SortDir(d => d === 'asc' ? 'desc' : 'asc');
-                              else { setC2SortBy(col.key!); setC2SortDir('asc'); }
+                              setC2Sort(prev => {
+                                const idx = prev.findIndex(s => s.key === col.key);
+                                if (idx === -1) return [...prev, {key: col.key!, dir: 'asc'}];
+                                if (prev[idx].dir === 'asc') return prev.map((s, i) => i === idx ? {...s, dir: 'desc'} : s);
+                                return prev.filter((_, i) => i !== idx);
+                              });
                               setC2Offset(0);
                             } : undefined}
                             style={{
                               padding: '7px 10px', textAlign: col.right ? 'right' : 'left',
-                              color: active ? '#60a5fa' : '#475569',
+                              color: sortSpec ? '#60a5fa' : '#475569',
                               fontWeight: 600, fontSize: '0.8em',
                               borderBottom: '1px solid #1e293b', whiteSpace: 'nowrap',
                               cursor: col.key ? 'pointer' : 'default',
                               userSelect: 'none',
                             }}
                           >
-                            {col.label}{col.key ? (active ? (c2SortDir === 'asc' ? ' ↑' : ' ↓') : ' ↕') : ''}
+                            {col.label}
+                            {col.key && (
+                              sortSpec
+                                ? <span style={{marginLeft: 3, fontSize: '0.82em', opacity: 0.9}}>
+                                    {c2Sort.length > 1 && <sup style={{fontSize: '0.75em', marginRight: 1}}>{sortIdx + 1}</sup>}
+                                    {sortSpec.dir === 'asc' ? '↑' : '↓'}
+                                  </span>
+                                : <span style={{marginLeft: 3, color: '#1e293b', fontSize: '0.82em'}}>↕</span>
+                            )}
                           </th>
                         );
                       })}

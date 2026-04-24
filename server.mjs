@@ -587,11 +587,16 @@ app.get('/api/catalog2/items', (req, res) => {
     const q       = String(req.query.q || '').trim();
     const limit   = Math.min(200, Math.max(1, Number(req.query.limit  || 50)));
     const offset  = Math.max(0, Number(req.query.offset || 0));
-    const sortBy  = String(req.query.sort_by  || 'item_name');
-    const sortDir = req.query.sort_dir === 'desc' ? 'DESC' : 'ASC';
+    const sortByRaw  = String(req.query.sort_by  || 'item_name').split(',');
+    const sortDirRaw = String(req.query.sort_dir || 'asc').split(',');
 
     const allowedSort = new Set(['item_name','item_code','qty','retail_price','purchase_price','parent_name','last_sale_date','days_since_last_sale']);
-    const col = allowedSort.has(sortBy) ? sortBy : 'item_name';
+    const orderClauses = sortByRaw.map((col, i) => {
+      if (!allowedSort.has(col)) return null;
+      const dir = (sortDirRaw[i] || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+      return `${col} ${dir} NULLS LAST`;
+    }).filter(Boolean);
+    if (!orderClauses.length) orderClauses.push('item_name ASC NULLS LAST');
 
     const conditions = [];
     const params = [];
@@ -624,7 +629,7 @@ app.get('/api/catalog2/items', (req, res) => {
         GROUP BY item_code
       ) ls ON ls.item_code = cp.item_code
       ${where}
-      ORDER BY ${col} ${sortDir} NULLS LAST
+      ORDER BY ${orderClauses.join(', ')}
       LIMIT ? OFFSET ?
     `).all(...params, limit, offset);
 
