@@ -633,25 +633,30 @@ app.get('/api/catalog2/item/:code', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Sales chart data: aggregated by month from catalog_sales
-// Returns stub empty series when no data
+// Sales chart data: aggregated by day / week / month
 app.get('/api/catalog2/item/:code/sales', (req, res) => {
   try {
-    const code  = req.params.code;
-    const from  = String(req.query.from || '2024-01-01');
-    const to    = String(req.query.to   || new Date().toISOString().slice(0, 10));
+    const code = req.params.code;
+    const from = String(req.query.from || '2024-01-01');
+    const to   = String(req.query.to   || new Date().toISOString().slice(0, 10));
+    const gran = String(req.query.gran || 'month'); // day | week | month
+
+    const groupExpr =
+      gran === 'day'  ? `strftime('%Y-%m-%d', sale_date)` :
+      gran === 'week' ? `strftime('%G-W%V',   sale_date)` :
+                        `strftime('%Y-%m',    sale_date)`;
 
     const rows = db.prepare(`
-      SELECT strftime('%Y-%m', sale_date) AS month,
+      SELECT ${groupExpr} AS period,
              SUM(sales_qty)  AS sales,
              SUM(return_qty) AS returns
       FROM catalog_sales
       WHERE item_code = ? AND sale_date >= ? AND sale_date <= ?
-      GROUP BY month
-      ORDER BY month ASC
+      GROUP BY period
+      ORDER BY period ASC
     `).all(code, from, to);
 
-    res.json({ series: rows, has_data: rows.length > 0 });
+    res.json({ series: rows, has_data: rows.length > 0, gran });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

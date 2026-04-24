@@ -71,8 +71,9 @@ type Catalog2Item = {
 };
 type C2TreeNode = {name: string; item_count: number};
 type C2TreeEntry = {children: C2TreeNode[]; directItems: number};
-type C2SalesSeries = {month: string; sales: number; returns: number};
-type C2SalesData = {series: C2SalesSeries[]; has_data: boolean};
+type C2Gran = 'day' | 'week' | 'month';
+type C2SalesSeries = {period: string; sales: number; returns: number};
+type C2SalesData = {series: C2SalesSeries[]; has_data: boolean; gran: C2Gran};
 type Catalog2Response = {items: Catalog2Item[]; total: number; limit: number; offset: number; has_more: boolean};
 
 type CreateMode = 'single' | 'multi';
@@ -152,55 +153,131 @@ function ClassBadge({abc, xyz}: {abc: string; xyz: string}) {
   );
 }
 
-// ── catalog2: sales bar chart ─────────────────────────────────────────────────
+// ── catalog2: line chart helpers ──────────────────────────────────────────────
 
-function SalesBarChart({series}: {series: C2SalesSeries[]}) {
+const RU_MONTHS = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+
+function fmtPeriod(period: string, gran: C2Gran): string {
+  if (gran === 'day') {
+    // "2024-03-15" → "15 мар"
+    const m = parseInt(period.slice(5, 7), 10) - 1;
+    return `${period.slice(8)} ${RU_MONTHS[m]}`;
+  }
+  if (gran === 'week') {
+    // "2024-W03" → "W03 '24"
+    return `${period.slice(5)} '${period.slice(2, 4)}`;
+  }
+  // "2024-03" → "мар '24"
+  const m = parseInt(period.slice(5, 7), 10) - 1;
+  return `${RU_MONTHS[m]} '${period.slice(2, 4)}`;
+}
+
+function SalesLineChart({series, gran}: {series: C2SalesSeries[]; gran: C2Gran}) {
   if (!series.length) {
     return (
-      <div style={{textAlign: 'center', color: '#475569', padding: '32px 0', fontSize: '0.88em'}}>
+      <div style={{textAlign: 'center', color: '#475569', padding: '36px 0', fontSize: '0.88em'}}>
         Данных о продажах пока нет
       </div>
     );
   }
-  const maxY = Math.max(...series.map(s => Math.max(s.sales, s.returns)), 1);
-  const W = 600, H = 180, PL = 38, PR = 8, PT = 10, PB = 30;
+
+  const W = 640, H = 210, PL = 42, PR = 16, PT = 24, PB = 38;
   const pw = W - PL - PR, ph = H - PT - PB;
-  const slot = pw / series.length;
-  const bw = Math.max(3, slot * 0.33);
+  const n = series.length;
+
+  const maxSales = Math.max(...series.map(s => s.sales), 1);
+  const maxRet   = Math.max(...series.map(s => s.returns), 0);
+  const maxY = Math.max(maxSales, maxRet, 1);
+
+  const xOf = (i: number) => PL + (n === 1 ? pw / 2 : (i / (n - 1)) * pw);
+  const yOf = (v: number) => PT + ph - Math.max(0, Math.min(1, v / maxY)) * ph;
+
+  const salesPts  = series.map((s, i) => `${xOf(i).toFixed(1)},${yOf(s.sales).toFixed(1)}`).join(' ');
+  const retPts    = series.map((s, i) => `${xOf(i).toFixed(1)},${yOf(s.returns).toFixed(1)}`).join(' ');
+  const salesArea = [
+    `M ${xOf(0).toFixed(1)},${(PT + ph).toFixed(1)}`,
+    ...series.map((s, i) => `L ${xOf(i).toFixed(1)},${yOf(s.sales).toFixed(1)}`),
+    `L ${xOf(n - 1).toFixed(1)},${(PT + ph).toFixed(1)} Z`,
+  ].join(' ');
+
+  // X-axis label density
+  const labelStep = n <= 14 ? 1 : n <= 31 ? 2 : n <= 60 ? 5 : n <= 90 ? 7 : n <= 180 ? 14 : n <= 365 ? 30 : 52;
+  // Y-axis ticks
+  const yTicks = [0, 0.25, 0.5, 0.75, 1];
+  // Show dots only for small datasets
+  const showDots = n <= 90;
+
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{width: '100%', height: 'auto', display: 'block'}}>
-      {[0, 0.5, 1].map(t => {
+      <defs>
+        <linearGradient id="c2sg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stopColor="#3b82f6" stopOpacity={0.35}/>
+          <stop offset="100%" stopColor="#3b82f6" stopOpacity={0}/>
+        </linearGradient>
+      </defs>
+
+      {/* Y grid */}
+      {yTicks.map(t => {
         const y = PT + ph * (1 - t);
         return (
           <g key={t}>
-            <line x1={PL} y1={y} x2={W - PR} y2={y} stroke="#1e293b" strokeWidth={t === 0 ? 1 : 0.5}/>
-            <text x={PL - 3} y={y + 3.5} fontSize={8} textAnchor="end" fill="#475569">{Math.round(maxY * t)}</text>
+            <line x1={PL} y1={y} x2={W - PR} y2={y} stroke={t === 0 ? '#334155' : '#1e293b'} strokeWidth={t === 0 ? 1 : 0.6}/>
+            <text x={PL - 5} y={y + 3.5} fontSize={8.5} textAnchor="end" fill="#475569">
+              {Math.round(maxY * t)}
+            </text>
           </g>
         );
       })}
+
+      {/* Area fill */}
+      <path d={salesArea} fill="url(#c2sg)"/>
+
+      {/* Returns line */}
+      {maxRet > 0 && (
+        <polyline points={retPts} fill="none" stroke="#ef4444" strokeWidth={1.5}
+          strokeLinejoin="round" strokeLinecap="round" strokeDasharray="4 2"/>
+      )}
+
+      {/* Sales line */}
+      <polyline points={salesPts} fill="none" stroke="#3b82f6" strokeWidth={2.2}
+        strokeLinejoin="round" strokeLinecap="round"/>
+
+      {/* Dots */}
+      {showDots && series.map((s, i) => (
+        <g key={i}>
+          <circle cx={xOf(i)} cy={yOf(s.sales)} r={n <= 30 ? 3 : 2} fill="#3b82f6" stroke="#0f172a" strokeWidth={1}>
+            <title>{s.period}: {s.sales} прод.</title>
+          </circle>
+          {s.returns > 0 && (
+            <circle cx={xOf(i)} cy={yOf(s.returns)} r={2} fill="#ef4444" stroke="#0f172a" strokeWidth={1}>
+              <title>{s.period}: {s.returns} возвр.</title>
+            </circle>
+          )}
+        </g>
+      ))}
+
+      {/* X labels */}
       {series.map((s, i) => {
-        const cx = PL + slot * i + slot / 2;
-        const sh = (s.sales / maxY) * ph;
-        const rh = (s.returns / maxY) * ph;
+        if (i % labelStep !== 0 && i !== n - 1) return null;
+        // avoid overlap at end
+        if (i === n - 1 && n > 1 && (n - 1) % labelStep < labelStep * 0.5) return null;
         return (
-          <g key={i}>
-            <rect x={cx - bw - 1} y={PT + ph - sh} width={bw} height={Math.max(sh, 0.5)} fill="#3b82f6" rx={1.5}>
-              <title>{s.month}: продажи {s.sales}</title>
-            </rect>
-            <rect x={cx + 1} y={PT + ph - rh} width={bw} height={Math.max(rh, 0.5)} fill="#ef4444" rx={1.5}>
-              <title>{s.month}: возвраты {s.returns}</title>
-            </rect>
-            <text x={cx} y={H - 6} fontSize={7} textAnchor="middle" fill="#475569">{s.month.slice(5)}</text>
-            {series.length <= 14 && s.sales > 0 && (
-              <text x={cx - bw / 2 - 0.5} y={PT + ph - sh - 2} fontSize={7} textAnchor="middle" fill="#93c5fd">{s.sales}</text>
-            )}
-          </g>
+          <text key={i} x={xOf(i)} y={H - 4} fontSize={8} textAnchor="middle" fill="#475569">
+            {fmtPeriod(s.period, gran)}
+          </text>
         );
       })}
-      <rect x={PL} y={PT + 2} width={7} height={5} fill="#3b82f6" rx={1}/>
-      <text x={PL + 9} y={PT + 7} fontSize={8} fill="#94a3b8">Продажи</text>
-      <rect x={PL + 57} y={PT + 2} width={7} height={5} fill="#ef4444" rx={1}/>
-      <text x={PL + 66} y={PT + 7} fontSize={8} fill="#94a3b8">Возвраты</text>
+
+      {/* Legend */}
+      <line x1={PL} y1={8} x2={PL + 18} y2={8} stroke="#3b82f6" strokeWidth={2.2}/>
+      <circle cx={PL + 9} cy={8} r={2.5} fill="#3b82f6"/>
+      <text x={PL + 22} y={11.5} fontSize={9} fill="#94a3b8">Продажи</text>
+      {maxRet > 0 && (
+        <>
+          <line x1={PL + 72} y1={8} x2={PL + 90} y2={8} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 2"/>
+          <text x={PL + 94} y={11.5} fontSize={9} fill="#94a3b8">Возвраты</text>
+        </>
+      )}
     </svg>
   );
 }
@@ -215,13 +292,13 @@ const C2_PRESETS = [
 ];
 
 function ProductDetailModal2({
-  item, onClose, salesData, salesLoading, chartFrom, chartTo,
-  setChartFrom, setChartTo,
+  item, onClose, salesData, salesLoading, chartFrom, chartTo, chartGran,
+  setChartFrom, setChartTo, setChartGran,
 }: {
   item: Catalog2Item; onClose: () => void;
   salesData: C2SalesData | null; salesLoading: boolean;
-  chartFrom: string; chartTo: string;
-  setChartFrom: (v: string) => void; setChartTo: (v: string) => void;
+  chartFrom: string; chartTo: string; chartGran: C2Gran;
+  setChartFrom: (v: string) => void; setChartTo: (v: string) => void; setChartGran: (v: C2Gran) => void;
 }) {
   const profit = item.retail_price - item.purchase_price;
   const margin = item.retail_price > 0 ? (profit / item.retail_price * 100) : 0;
@@ -284,43 +361,64 @@ function ProductDetailModal2({
 
         {/* Chart section */}
         <div style={{background: '#0f172a', borderRadius: 10, padding: '16px'}}>
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8}}>
+          {/* Title + stats */}
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 6}}>
             <div style={{fontWeight: 600, fontSize: '0.88em', color: '#f1f5f9'}}>
               Динамика продаж
               {salesData?.has_data && (
-                <span style={{fontWeight: 400, color: '#64748b', marginLeft: 8, fontSize: '0.9em'}}>
-                  {totalSales} продаж · {totalReturns} возвратов
+                <span style={{fontWeight: 400, color: '#64748b', marginLeft: 8, fontSize: '0.88em'}}>
+                  {totalSales.toLocaleString('ru-RU')} прод. · {totalReturns} возвр.
+                  {salesData.series.length > 0 && (
+                    <span style={{marginLeft: 6, color: '#334155'}}>({salesData.series.length} {salesData.gran === 'day' ? 'дней' : salesData.gran === 'week' ? 'недель' : 'мес.'})</span>
+                  )}
                 </span>
               )}
             </div>
-            <div style={{display: 'flex', gap: 4}}>
-              {C2_PRESETS.map(p => (
-                <button key={p.label} onClick={() => applyPreset(p.months)} style={{
-                  padding: '3px 8px', borderRadius: 5, border: '1px solid #334155', cursor: 'pointer',
-                  background: '#1e293b', color: '#94a3b8', fontSize: '0.75em',
-                }}>{p.label}</button>
+            {/* Granularity toggle */}
+            <div style={{display: 'flex', gap: 2, background: '#1e293b', borderRadius: 7, padding: 2}}>
+              {(['day','week','month'] as C2Gran[]).map(g => (
+                <button key={g} onClick={() => setChartGran(g)} style={{
+                  padding: '3px 10px', borderRadius: 5, border: 'none', cursor: 'pointer', fontSize: '0.76em', fontWeight: 600,
+                  background: chartGran === g ? '#2563eb' : 'transparent',
+                  color: chartGran === g ? '#fff' : '#64748b',
+                  transition: 'background .15s',
+                }}>
+                  {g === 'day' ? 'Дни' : g === 'week' ? 'Недели' : 'Месяцы'}
+                </button>
               ))}
             </div>
           </div>
-          <div style={{display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap'}}>
-            <label style={{display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.78em', color: '#64748b'}}>
-              От
+
+          {/* Date range + presets */}
+          <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap'}}>
+            <div style={{display: 'flex', gap: 3}}>
+              {C2_PRESETS.map(p => (
+                <button key={p.label} onClick={() => applyPreset(p.months)} style={{
+                  padding: '2px 7px', borderRadius: 5, border: '1px solid #334155', cursor: 'pointer',
+                  background: '#1e293b', color: '#64748b', fontSize: '0.73em',
+                }}>{p.label}</button>
+              ))}
+            </div>
+            <label style={{display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.78em', color: '#475569'}}>
+              от
               <input type="month" value={chartFrom} onChange={e => setChartFrom(e.target.value)}
-                style={{background: '#1e293b', border: '1px solid #334155', borderRadius: 5, color: '#f1f5f9', padding: '3px 6px', fontSize: '0.9em'}}
+                style={{background: '#1e293b', border: '1px solid #334155', borderRadius: 5, color: '#f1f5f9', padding: '2px 6px', fontSize: '0.88em'}}
               />
             </label>
-            <label style={{display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.78em', color: '#64748b'}}>
-              До
+            <label style={{display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.78em', color: '#475569'}}>
+              до
               <input type="month" value={chartTo} onChange={e => setChartTo(e.target.value)}
-                style={{background: '#1e293b', border: '1px solid #334155', borderRadius: 5, color: '#f1f5f9', padding: '3px 6px', fontSize: '0.9em'}}
+                style={{background: '#1e293b', border: '1px solid #334155', borderRadius: 5, color: '#f1f5f9', padding: '2px 6px', fontSize: '0.88em'}}
               />
             </label>
           </div>
+
+          {/* Chart */}
           {salesLoading
-            ? <div style={{display: 'flex', alignItems: 'center', gap: 8, padding: '32px 0', justifyContent: 'center', color: '#475569', fontSize: '0.88em'}}>
+            ? <div style={{display: 'flex', alignItems: 'center', gap: 8, padding: '36px 0', justifyContent: 'center', color: '#475569', fontSize: '0.88em'}}>
                 <div className="spinner" style={{width: 16, height: 16}}/> Загрузка...
               </div>
-            : <SalesBarChart series={salesData?.series || []} />
+            : <SalesLineChart series={salesData?.series || []} gran={salesData?.gran ?? chartGran}/>
           }
         </div>
       </div>
@@ -575,6 +673,7 @@ export function App() {
   const [c2SalesLoading, setC2SalesLoading] = useState(false);
   const [c2ChartFrom, setC2ChartFrom] = useState('2024-01');
   const [c2ChartTo, setC2ChartTo] = useState(() => new Date().toISOString().slice(0, 7));
+  const [c2ChartGran, setC2ChartGran] = useState<C2Gran>('month');
 
   // ── api helpers ─────────────────────────────────────────────────────────────
 
@@ -647,13 +746,14 @@ export function App() {
     } finally { setC2Loading(false); }
   }
 
-  async function c2LoadSales(code: string, from: string, to: string) {
+  async function c2LoadSales(code: string, from: string, to: string, gran: C2Gran) {
     if (!code) return;
     setC2SalesLoading(true);
     try {
       const params = new URLSearchParams();
       params.set('from', from + '-01');
       params.set('to', to + '-31');
+      params.set('gran', gran);
       const data = await fetchJSON<C2SalesData>(apiUrl(`/api/catalog2/item/${encodeURIComponent(code)}/sales?${params}`));
       setC2Sales(data);
     } catch { setC2Sales(null); }
@@ -793,8 +893,8 @@ export function App() {
   useEffect(() => {
     if (!c2Modal) return;
     const code = c2Modal.item_code?.trim() || String(c2Modal.id);
-    c2LoadSales(code, c2ChartFrom, c2ChartTo);
-  }, [c2Modal, c2ChartFrom, c2ChartTo]);
+    c2LoadSales(code, c2ChartFrom, c2ChartTo, c2ChartGran);
+  }, [c2Modal, c2ChartFrom, c2ChartTo, c2ChartGran]);
 
   // ── draft actions ─────────────────────────────────────────────────────────
 
@@ -921,8 +1021,10 @@ export function App() {
           salesLoading={c2SalesLoading}
           chartFrom={c2ChartFrom}
           chartTo={c2ChartTo}
+          chartGran={c2ChartGran}
           setChartFrom={setC2ChartFrom}
           setChartTo={setC2ChartTo}
+          setChartGran={setC2ChartGran}
         />
       )}
       {explainRow && <ExplainModal row={explainRow} onClose={() => setExplainRow(null)} />}
