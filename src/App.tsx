@@ -69,8 +69,29 @@ type Catalog2Item = {
   group_l6: string|null; group_l7: string|null; group_l8: string|null;
   group_depth: number; group_full_path: string|null;
   last_sale_date: string|null; days_since_last_sale: number|null;
+  abc_class: string|null; xyz_class: string|null;
+  forecast_day_matrix: number|null; forecast_to_order: number|null;
+  forecast_mode: string|null; w_forecast_final: number|null;
 };
 type C2GroupResult = {name: string; depth: number; item_count: number; path: string};
+type C2Forecast = {
+  item_code: string; calc_date: string;
+  avg_day_365: number; avg_day_30: number; std_day_no_anom: number; observed_days_365: number;
+  week_same_2024: number; week_same_2025: number; week_next_2024: number; week_next_2025: number;
+  month_coef_1: number; month_coef_2: number; month_coef_3: number; month_coef_4: number;
+  month_coef_5: number; month_coef_6: number; month_coef_7: number; month_coef_8: number;
+  month_coef_9: number; month_coef_10: number; month_coef_11: number; month_coef_12: number;
+  peak_months: number[];
+  anomaly_days_count_365: number; anomaly_prob_day: number; anomaly_excess_avg: number;
+  abc_class: string; xyz_class: string;
+  d_base: number; w_base: number; w_season: number;
+  k_month: number; k_month_clip: number;
+  w_forecast_core: number; w_anom_adj: number; w_forecast_final: number; forecast_day_matrix: number;
+  ss_base: number; ss_anom: number; ss_total: number;
+  lead_time_days: number; order_cycle_days: number;
+  recommended_stock: number; to_order: number;
+  demand_mode: string; total_net_sales_365: number;
+};
 type C2TreeNode = {name: string; item_count: number};
 type C2TreeEntry = {children: C2TreeNode[]; directItems: number};
 type C2Gran = 'day' | 'week' | 'month';
@@ -155,9 +176,39 @@ function ClassBadge({abc, xyz}: {abc: string; xyz: string}) {
   );
 }
 
-// ── catalog2: line chart helpers ──────────────────────────────────────────────
+// ── catalog2: seasonality bars ────────────────────────────────────────────────
 
 const RU_MONTHS = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+
+function SeasonBars({coefs, peak}: {coefs: number[]; peak: number[]}) {
+  const W = 320, H = 72, PB = 18;
+  const ph = H - PB;
+  const barW = W / 12;
+  const maxC = Math.max(...coefs, 1.4);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{width: '100%', height: 'auto', display: 'block'}}>
+      {coefs.map((c, i) => {
+        const m = i + 1;
+        const isPeak = peak.includes(m);
+        const bH = Math.max(2, (c / maxC) * ph);
+        const x = i * barW;
+        return (
+          <g key={m}>
+            {isPeak && <rect x={x} y={0} width={barW} height={H} fill="rgba(245,158,11,0.07)"/>}
+            <rect x={x + 1} y={ph - bH} width={barW - 2} height={bH}
+              fill={isPeak ? '#f59e0b' : c > 1.0 ? '#3b82f6' : '#334155'} rx={2}/>
+            <text x={x + barW / 2} y={H - 3} textAnchor="middle" fontSize={7.5}
+              fill={isPeak ? '#f59e0b' : '#475569'}>{RU_MONTHS[i]}</text>
+          </g>
+        );
+      })}
+      <line x1={0} y1={ph - (1 / maxC) * ph} x2={W} y2={ph - (1 / maxC) * ph}
+        stroke="#22c55e" strokeWidth={0.8} strokeDasharray="3 2" opacity={0.6}/>
+    </svg>
+  );
+}
+
+// ── catalog2: line chart helpers ──────────────────────────────────────────────
 
 function fmtPeriod(period: string | undefined | null, gran: C2Gran): string {
   if (!period) return '—';
@@ -174,7 +225,7 @@ function fmtPeriod(period: string | undefined | null, gran: C2Gran): string {
   } catch { return period; }
 }
 
-function SalesLineChart({series, gran}: {series: C2SalesSeries[]; gran: C2Gran}) {
+function SalesLineChart({series, gran, peakMonths}: {series: C2SalesSeries[]; gran: C2Gran; peakMonths?: number[]}) {
   const [zoomRange, setZoomRange] = useState<[number,number] | null>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [dragStart, setDragStart] = useState<number | null>(null);
@@ -303,6 +354,15 @@ function SalesLineChart({series, gran}: {series: C2SalesSeries[]; gran: C2Gran})
           );
         })}
 
+        {/* Peak month bands (month granularity) */}
+        {peakMonths && peakMonths.length > 0 && gran === 'month' && displayed.map((s, i) => {
+          const m = s.period ? parseInt(s.period.slice(5, 7), 10) : 0;
+          if (!peakMonths.includes(m)) return null;
+          const x = xOf(i);
+          const step = n > 1 ? pw / (n - 1) : pw;
+          return <rect key={i} x={x - step / 2} y={PT} width={step} height={ph} fill="rgba(245,158,11,0.09)"/>;
+        })}
+
         {/* Drag selection highlight */}
         {dragA !== null && dragB !== null && dragA !== dragB && (
           <rect
@@ -415,14 +475,23 @@ const C2_PRESETS = [
   {label: '2024+', months: 0},
 ];
 
+const DEMAND_MODE_LABELS: Record<string, {label: string; color: string}> = {
+  normal:           {label: 'Стабильный',        color: '#22c55e'},
+  short_history:    {label: 'Короткая история',   color: '#3b82f6'},
+  limited_history:  {label: 'Ограниченная история', color: '#f59e0b'},
+  new_no_history:   {label: 'Новый товар',         color: '#8b5cf6'},
+};
+
 function ProductDetailModal2({
   item, onClose, salesData, salesLoading, chartFrom, chartTo, chartGran,
   setChartFrom, setChartTo, setChartGran,
+  forecastData, forecastLoading,
 }: {
   item: Catalog2Item; onClose: () => void;
   salesData: C2SalesData | null; salesLoading: boolean;
   chartFrom: string; chartTo: string; chartGran: C2Gran;
   setChartFrom: (v: string) => void; setChartTo: (v: string) => void; setChartGran: (v: C2Gran) => void;
+  forecastData: C2Forecast | null; forecastLoading: boolean;
 }) {
   const profit = item.retail_price - item.purchase_price;
   const margin = item.retail_price > 0 ? (profit / item.retail_price * 100) : 0;
@@ -542,9 +611,125 @@ function ProductDetailModal2({
             ? <div style={{display: 'flex', alignItems: 'center', gap: 8, padding: '36px 0', justifyContent: 'center', color: '#475569', fontSize: '0.88em'}}>
                 <div className="spinner" style={{width: 16, height: 16}}/> Загрузка...
               </div>
-            : <SalesLineChart series={salesData?.series || []} gran={salesData?.gran ?? chartGran}/>
+            : <SalesLineChart
+                series={salesData?.series || []}
+                gran={salesData?.gran ?? chartGran}
+                peakMonths={forecastData?.peak_months}
+              />
           }
         </div>
+
+        {/* Forecast section */}
+        {forecastLoading
+          ? <div style={{display: 'flex', alignItems: 'center', gap: 8, padding: '28px 0', justifyContent: 'center', color: '#475569', fontSize: '0.88em'}}>
+              <div className="spinner" style={{width: 16, height: 16}}/> Загрузка прогноза...
+            </div>
+          : forecastData
+            ? (() => {
+                const f = forecastData;
+                const dm = DEMAND_MODE_LABELS[f.demand_mode] || {label: f.demand_mode, color: '#94a3b8'};
+                const coefs = Array.from({length: 12}, (_, i) => (f as any)[`month_coef_${i + 1}`] as number);
+                const fmtN = (v: number, d = 2) => v.toLocaleString('ru-RU', {minimumFractionDigits: d, maximumFractionDigits: d});
+                return (
+                  <div style={{background: '#0f172a', borderRadius: 10, padding: '16px', marginTop: 14}}>
+                    {/* Header */}
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 6}}>
+                      <span style={{fontWeight: 600, fontSize: '0.88em', color: '#f1f5f9'}}>
+                        Прогноз закупки
+                        <span style={{fontSize: '0.82em', fontWeight: 400, color: '#475569', marginLeft: 8}}>{f.calc_date}</span>
+                      </span>
+                      <div style={{display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap'}}>
+                        <ClassBadge abc={f.abc_class} xyz={f.xyz_class}/>
+                        <span style={{
+                          background: dm.color + '22', color: dm.color,
+                          borderRadius: 4, padding: '2px 7px', fontSize: '0.74em', fontWeight: 600,
+                          border: `1px solid ${dm.color}44`,
+                        }}>{dm.label}</span>
+                      </div>
+                    </div>
+
+                    {/* Seasonality */}
+                    <div style={{marginBottom: 14}}>
+                      <div style={{fontSize: '0.76em', color: '#475569', marginBottom: 5}}>
+                        Сезонность
+                        {f.peak_months.length > 0
+                          ? <span style={{color: '#f59e0b', marginLeft: 6}}>
+                              пик: {f.peak_months.map(m => RU_MONTHS[m - 1]).join(', ')}
+                            </span>
+                          : <span style={{color: '#334155', marginLeft: 6}}>пиков нет</span>
+                        }
+                      </div>
+                      <SeasonBars coefs={coefs} peak={f.peak_months}/>
+                    </div>
+
+                    {/* Formula breakdown */}
+                    <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px', fontSize: '0.78em', marginBottom: 14}}>
+                      {([
+                        ['Ср. продажи/день (365 дн.)', `${fmtN(f.avg_day_365)} шт./день`],
+                        ['Ср. продажи/день (30 дн.)', `${fmtN(f.avg_day_30)} шт./день`],
+                        ['Std (без аномалий)', `${fmtN(f.std_day_no_anom)}`],
+                        ['Наблюдаемых дней 365', `${f.observed_days_365}`],
+                        ['Базовый недельный спрос', `${fmtN(f.w_base, 1)} шт./нед.`],
+                        ['Сезонный недельный спрос', `${fmtN(f.w_season, 1)} шт./нед.`],
+                        ['K месяца (clip 0.85–1.25)', `${fmtN(f.k_month, 3)} → ${fmtN(f.k_month_clip, 3)}`],
+                        ['W прогноз (ядро)', `${fmtN(f.w_forecast_core, 1)} шт./нед.`],
+                        ['W аномальная надбавка', `${fmtN(f.w_anom_adj, 2)} шт./нед.`],
+                        ['W прогноз итого', `${fmtN(f.w_forecast_final, 1)} шт./нед.`],
+                        ['Аномалий за 365 дн.', `${f.anomaly_days_count_365} дн. (p=${(f.anomaly_prob_day * 100).toFixed(2)}%)`],
+                        ['Избыток аномалии', `${fmtN(f.anomaly_excess_avg, 1)} шт./день`],
+                        ['Страховой запас (σ·√L)', `${fmtN(f.ss_base, 1)} шт.`],
+                        ['Страховой запас (аном.)', `${fmtN(f.ss_anom, 1)} шт.`],
+                        ['Срок доставки / цикл', `${f.lead_time_days} / ${f.order_cycle_days} дн.`],
+                        ['Продажи за 365 дн.', `${fmtN(f.total_net_sales_365, 0)} шт.`],
+                      ] as [string, string][]).map(([label, val]) => (
+                        <div key={label} style={{
+                          display: 'flex', justifyContent: 'space-between',
+                          borderBottom: '1px solid #1e293b', padding: '4px 0', gap: 6,
+                        }}>
+                          <span style={{color: '#475569'}}>{label}</span>
+                          <span style={{color: '#94a3b8', textAlign: 'right', fontVariantNumeric: 'tabular-nums'}}>{val}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Recommendation card */}
+                    <div style={{
+                      background: '#0a1628', borderRadius: 8, padding: '14px 16px',
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+                    }}>
+                      <div>
+                        <div style={{fontSize: '0.72em', color: '#475569', marginBottom: 2}}>Прогноз/день</div>
+                        <div style={{fontWeight: 600, color: '#64748b', fontSize: '0.95em'}}>
+                          {fmtN(f.forecast_day_matrix)} шт.
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{fontSize: '0.72em', color: '#475569', marginBottom: 2}}>Страховой запас</div>
+                        <div style={{fontWeight: 600, color: '#f59e0b', fontSize: '0.95em'}}>
+                          {fmtN(f.ss_total, 1)} шт.
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{fontSize: '0.72em', color: '#475569', marginBottom: 2}}>Рекоменд. остаток</div>
+                        <div style={{fontWeight: 600, color: '#94a3b8', fontSize: '0.95em'}}>
+                          {fmtN(f.recommended_stock, 1)} шт.
+                        </div>
+                      </div>
+                      <div style={{textAlign: 'center', background: f.to_order > 0 ? '#052e16' : '#0f172a', borderRadius: 8, padding: '8px 20px', border: `1px solid ${f.to_order > 0 ? '#16a34a' : '#1e293b'}`}}>
+                        <div style={{fontSize: '0.72em', color: '#475569', marginBottom: 2}}>Заказать</div>
+                        <div style={{fontWeight: 800, fontSize: '1.8em', color: f.to_order > 0 ? '#22c55e' : '#334155', lineHeight: 1}}>
+                          {f.to_order}
+                        </div>
+                        <div style={{fontSize: '0.7em', color: '#475569'}}>шт.</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()
+            : <div style={{padding: '12px 0', color: '#334155', fontSize: '0.82em', textAlign: 'center'}}>
+                Прогноз не рассчитан — нет продаж за последний год
+              </div>
+        }
       </div>
     </div>
   );
@@ -803,6 +988,8 @@ export function App() {
   const [c2HasStock, setC2HasStock] = useState(false);
   const [c2TreeSearch, setC2TreeSearch] = useState('');
   const [c2TreeSearchResults, setC2TreeSearchResults] = useState<C2GroupResult[]>([]);
+  const [c2Forecast, setC2Forecast] = useState<C2Forecast | null>(null);
+  const [c2ForecastLoading, setC2ForecastLoading] = useState(false);
 
   // ── api helpers ─────────────────────────────────────────────────────────────
 
@@ -876,6 +1063,16 @@ export function App() {
       console.error('c2LoadItems', err);
       setC2Items([]); setC2Total(0); setC2HasMore(false);
     } finally { setC2Loading(false); }
+  }
+
+  async function c2LoadForecast(code: string) {
+    if (!code) return;
+    setC2ForecastLoading(true);
+    try {
+      const data = await fetchJSON<C2Forecast>(apiUrl(`/api/catalog2/item/${encodeURIComponent(code)}/forecast`));
+      setC2Forecast(data);
+    } catch { setC2Forecast(null); }
+    finally { setC2ForecastLoading(false); }
   }
 
   async function c2SearchGroups(q: string) {
@@ -1036,6 +1233,12 @@ export function App() {
   }, [c2TreeSearch]);
 
   useEffect(() => {
+    if (!c2Modal) { setC2Forecast(null); return; }
+    const code = c2Modal.item_code?.trim() || String(c2Modal.id);
+    c2LoadForecast(code);
+  }, [c2Modal]);
+
+  useEffect(() => {
     if (!c2Modal) return;
     const code = c2Modal.item_code?.trim() || String(c2Modal.id);
     c2LoadSales(code, c2ChartFrom, c2ChartTo, c2ChartGran);
@@ -1170,6 +1373,8 @@ export function App() {
           setChartFrom={setC2ChartFrom}
           setChartTo={setC2ChartTo}
           setChartGran={setC2ChartGran}
+          forecastData={c2Forecast}
+          forecastLoading={c2ForecastLoading}
         />
       )}
       {explainRow && <ExplainModal row={explainRow} onClose={() => setExplainRow(null)} />}
@@ -1896,6 +2101,7 @@ export function App() {
                         {label: 'Название', key: 'item_name', right: false},
                         {label: 'Код / ШК', key: null, right: false},
                         {label: 'Подгруппа', key: 'parent_name', right: false},
+                        {label: 'ABC·XYZ', key: 'abc_class', right: true},
                         {label: 'Остаток', key: 'qty', right: true},
                         {label: 'Цена прод.', key: 'retail_price', right: true},
                         {label: 'Цена закуп.', key: 'purchase_price', right: true},
@@ -1954,6 +2160,12 @@ export function App() {
                           <td style={{padding: '7px 10px', color: '#64748b', whiteSpace: 'nowrap', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis'}}>
                             {item.parent_name || '—'}
                           </td>
+                          <td style={{padding: '7px 10px', textAlign: 'right'}}>
+                            {(item.abc_class || item.xyz_class)
+                              ? <ClassBadge abc={item.abc_class || ''} xyz={item.xyz_class || ''}/>
+                              : <span style={{color: '#1e293b'}}>—</span>
+                            }
+                          </td>
                           <td style={{padding: '7px 10px', textAlign: 'right', fontWeight: 600, color: item.qty > 0 ? '#22c55e' : '#334155'}}>
                             {item.qty > 0 ? item.qty.toLocaleString('ru-RU') : '—'}
                           </td>
@@ -1980,7 +2192,7 @@ export function App() {
                     })}
                     {!c2Loading && !c2Items.length && (
                       <tr>
-                        <td colSpan={7} style={{padding: '40px 16px', textAlign: 'center', color: '#334155'}}>Товары не найдены</td>
+                        <td colSpan={8} style={{padding: '40px 16px', textAlign: 'center', color: '#334155'}}>Товары не найдены</td>
                       </tr>
                     )}
                   </tbody>

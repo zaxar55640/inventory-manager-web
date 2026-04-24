@@ -590,7 +590,7 @@ app.get('/api/catalog2/items', (req, res) => {
     const sortByRaw  = String(req.query.sort_by  || 'item_name').split(',');
     const sortDirRaw = String(req.query.sort_dir || 'asc').split(',');
 
-    const allowedSort = new Set(['item_name','item_code','qty','retail_price','purchase_price','parent_name','last_sale_date','days_since_last_sale']);
+    const allowedSort = new Set(['item_name','item_code','qty','retail_price','purchase_price','parent_name','last_sale_date','days_since_last_sale','abc_class','forecast_day_matrix']);
     const orderClauses = sortByRaw.map((col, i) => {
       if (!allowedSort.has(col)) return null;
       const dir = (sortDirRaw[i] || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
@@ -624,13 +624,16 @@ app.get('/api/catalog2/items', (req, res) => {
              cp.group_l5, cp.group_l6, cp.group_l7, cp.group_l8,
              cp.group_depth, cp.group_full_path,
              ls.last_sale_date,
-             CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) AS days_since_last_sale
+             CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) AS days_since_last_sale,
+             cf.abc_class, cf.xyz_class, cf.forecast_day_matrix, cf.to_order AS forecast_to_order,
+             cf.demand_mode AS forecast_mode, cf.w_forecast_final
       FROM catalog_products cp
       LEFT JOIN (
         SELECT item_code, MAX(sale_date) AS last_sale_date
         FROM catalog_sales
         GROUP BY item_code
       ) ls ON ls.item_code = cp.item_code
+      LEFT JOIN catalog_forecast cf ON cf.item_code = cp.item_code
       ${where}
       ORDER BY ${orderClauses.join(', ')}
       LIMIT ? OFFSET ?
@@ -672,6 +675,17 @@ app.get('/api/catalog2/search-groups', (req, res) => {
     results.sort((a, b) => b.item_count - a.item_count);
     res.json(results.slice(0, 20));
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Full forecast matrix for a product
+app.get('/api/catalog2/item/:code/forecast', (req, res) => {
+  try {
+    const code = req.params.code.trim();
+    const row = db.prepare('SELECT * FROM catalog_forecast WHERE item_code = ?').get(code);
+    if (!row) return res.status(404).json({error: 'no forecast data'});
+    try { row.peak_months = JSON.parse(row.peak_months || '[]'); } catch { row.peak_months = []; }
+    res.json(row);
+  } catch (err) { res.status(500).json({error: err.message}); }
 });
 
 // Returns single product detail by id or item_code
