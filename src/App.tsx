@@ -799,6 +799,7 @@ export function App() {
   const [c2ChartTo, setC2ChartTo] = useState(() => new Date().toISOString().slice(0, 7));
   const [c2ChartGran, setC2ChartGran] = useState<C2Gran>('month');
   const [c2Sort, setC2Sort] = useState<{key: string; dir: 'asc'|'desc'}[]>([{key: 'qty', dir: 'desc'}]);
+  const [c2HasStock, setC2HasStock] = useState(false);
   const [c2TreeSearch, setC2TreeSearch] = useState('');
   const [c2TreeSearchResults, setC2TreeSearchResults] = useState<C2GroupResult[]>([]);
 
@@ -854,7 +855,7 @@ export function App() {
     } catch (err) { console.error('c2LoadChildren', err); }
   }
 
-  async function c2LoadItems(path: string, q: string, offset: number, sort = c2Sort) {
+  async function c2LoadItems(path: string, q: string, offset: number, sort = c2Sort, hasStock = c2HasStock) {
     const params = new URLSearchParams();
     if (path) params.set('path', path);
     if (q.trim()) params.set('q', q.trim());
@@ -864,6 +865,7 @@ export function App() {
       params.set('sort_by', sort.map(s => s.key).join(','));
       params.set('sort_dir', sort.map(s => s.dir).join(','));
     }
+    if (hasStock) params.set('has_stock', '1');
     setC2Loading(true);
     try {
       const data = await fetchJSON<Catalog2Response>(apiUrl(`/api/catalog2/items?${params}`));
@@ -1027,7 +1029,7 @@ export function App() {
     if (tab !== 'catalog2') return;
     const t = setTimeout(() => { setC2Offset(0); c2LoadItems(c2Path, c2Search, 0); }, 300);
     return () => clearTimeout(t);
-  }, [c2Path, c2Search, c2Sort]);
+  }, [c2Path, c2Search, c2Sort, c2HasStock]);
 
   useEffect(() => {
     const t = setTimeout(() => c2SearchGroups(c2TreeSearch), 300);
@@ -1869,6 +1871,15 @@ export function App() {
                     value={c2Search}
                     onChange={e => setC2Search(e.target.value)}
                   />
+                  <label style={{display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, cursor: 'pointer', userSelect: 'none'}}>
+                    <input
+                      type="checkbox"
+                      checked={c2HasStock}
+                      onChange={e => { setC2HasStock(e.target.checked); setC2Offset(0); }}
+                      style={{width: 14, height: 14, accentColor: '#22c55e', cursor: 'pointer'}}
+                    />
+                    <span style={{color: '#64748b', fontSize: '0.8em', whiteSpace: 'nowrap'}}>Только с остатком</span>
+                  </label>
                   {c2Sort.length > 1 && (
                     <button
                       onClick={() => { setC2Sort([{key: 'qty', dir: 'desc'}]); setC2Offset(0); }}

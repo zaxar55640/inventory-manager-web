@@ -610,6 +610,9 @@ app.get('/api/catalog2/items', (req, res) => {
       conditions.push(`(cp.item_name LIKE ? OR cp.item_code LIKE ? OR cp.barcode = ?)`);
       params.push(`%${q}%`, `%${q}%`, q);
     }
+    if (req.query.has_stock === '1') {
+      conditions.push('cp.qty > 0');
+    }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
