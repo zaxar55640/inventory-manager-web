@@ -693,6 +693,127 @@ app.get('/api/catalog2/search-groups', (req, res) => {
 });
 
 // Full forecast matrix for a product
+app.get('/api/catalog2/analytics', (req, res) => {
+  try {
+    const scope = String(req.query.scope || 'all');
+    const pathStr = String(req.query.path || '');
+    const pathParts = pathStr ? pathStr.split(' / ') : [];
+    const conditions = [];
+    const params = [];
+
+    if (pathParts.length) {
+      const { where: pw, params: pp } = catalogPathWhere(pathParts);
+      conditions.push(pw);
+      params.push(...pp);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const levelCol = scope === 'subgroup'
+      ? `COALESCE(cp.parent_name, cp.group_l${Math.max(0, pathParts.length)})`
+      : `COALESCE(cp.group_l1, cp.parent_name, 'Без группы')`;
+    const pathExpr = scope === 'subgroup'
+      ? `COALESCE(cp.group_full_path, cp.parent_name, 'Без пути')`
+      : `COALESCE(cp.group_l0 || ' / ' || cp.group_l1, cp.group_full_path, cp.parent_name, 'Без пути')`;
+
+    const overview = db.prepare(`
+      SELECT
+        COUNT(*) AS total_sku,
+        SUM(CASE WHEN IFNULL(ls.days_since_last_sale, 9999) <= 90 THEN 1 ELSE 0 END) AS active_sku,
+        SUM(CASE WHEN IFNULL(ls.days_since_last_sale, 9999) > 90 THEN 1 ELSE 0 END) AS no_sales_sku,
+        SUM(CASE WHEN IFNULL(ls.days_since_last_sale, 9999) > 180 AND IFNULL(cp.qty,0) > 0 THEN 1 ELSE 0 END) AS dead_stock_sku,
+        ROUND(SUM(IFNULL(cp.qty,0)), 1) AS qty_total,
+        ROUND(SUM(IFNULL(cp.qty,0) * IFNULL(cp.retail_price,0)), 1) AS stock_value_retail,
+        ROUND(SUM(IFNULL(cp.qty,0) * IFNULL(cp.purchase_price,0)), 1) AS stock_value_purchase,
+        ROUND(SUM(IFNULL(s30.sales_30,0)), 1) AS total_sales_qty_30,
+        ROUND(SUM(IFNULL(s365.sales_365,0)), 1) AS total_sales_qty_365
+      FROM catalog_products cp
+      LEFT JOIN (
+        SELECT item_code, CAST(julianday('now') - julianday(MAX(sale_date)) AS INTEGER) AS days_since_last_sale
+        FROM catalog_sales GROUP BY item_code
+      ) ls ON ls.item_code = cp.item_code
+      LEFT JOIN (
+        SELECT item_code, SUM(sales_qty - return_qty) AS sales_30
+        FROM catalog_sales WHERE sale_date >= date('now', '-30 days') GROUP BY item_code
+      ) s30 ON s30.item_code = cp.item_code
+      LEFT JOIN (
+        SELECT item_code, SUM(sales_qty - return_qty) AS sales_365
+        FROM catalog_sales WHERE sale_date >= date('now', '-365 days') GROUP BY item_code
+      ) s365 ON s365.item_code = cp.item_code
+      ${where}
+    `).get(...params);
+
+    const totalSku = Number(overview.total_sku || 0);
+    overview.coverage_days = Number(overview.total_sales_qty_30 || 0) > 0
+      ? Math.round(Number(overview.qty_total || 0) / (Number(overview.total_sales_qty_30 || 0) / 30))
+      : null;
+    overview.active_share = totalSku ? Math.round((Number(overview.active_sku || 0) / totalSku) * 100) : 0;
+    overview.no_sales_share = totalSku ? Math.round((Number(overview.no_sales_sku || 0) / totalSku) * 100) : 0;
+    overview.dead_stock_share = totalSku ? Math.round((Number(overview.dead_stock_sku || 0) / totalSku) * 100) : 0;
+
+    const segments = db.prepare(`
+      SELECT
+        ${levelCol} AS name,
+        ${pathExpr} AS path,
+        COUNT(*) AS sku_count,
+        SUM(CASE WHEN IFNULL(ls.days_since_last_sale, 9999) <= 90 THEN 1 ELSE 0 END) AS active_sku,
+        SUM(CASE WHEN IFNULL(ls.days_since_last_sale, 9999) > 90 THEN 1 ELSE 0 END) AS no_sales_sku,
+        SUM(CASE WHEN IFNULL(ls.days_since_last_sale, 9999) > 180 AND IFNULL(cp.qty,0) > 0 THEN 1 ELSE 0 END) AS dead_stock_sku,
+        ROUND(SUM(IFNULL(cp.qty,0)), 1) AS qty_total,
+        ROUND(SUM(IFNULL(cp.qty,0) * IFNULL(cp.purchase_price,0)), 1) AS stock_value_purchase,
+        ROUND(SUM(IFNULL(cp.qty,0) * IFNULL(cp.retail_price,0)), 1) AS stock_value_retail,
+        ROUND(SUM(IFNULL(s30.sales_30,0)), 1) AS sales_qty_30,
+        ROUND(SUM(IFNULL(s365.sales_365,0)), 1) AS sales_qty_365,
+        ROUND(AVG(IFNULL(ls.days_since_last_sale, 9999)), 0) AS avg_days_since_last_sale
+      FROM catalog_products cp
+      LEFT JOIN (
+        SELECT item_code, CAST(julianday('now') - julianday(MAX(sale_date)) AS INTEGER) AS days_since_last_sale
+        FROM catalog_sales GROUP BY item_code
+      ) ls ON ls.item_code = cp.item_code
+      LEFT JOIN (
+        SELECT item_code, SUM(sales_qty - return_qty) AS sales_30
+        FROM catalog_sales WHERE sale_date >= date('now', '-30 days') GROUP BY item_code
+      ) s30 ON s30.item_code = cp.item_code
+      LEFT JOIN (
+        SELECT item_code, SUM(sales_qty - return_qty) AS sales_365
+        FROM catalog_sales WHERE sale_date >= date('now', '-365 days') GROUP BY item_code
+      ) s365 ON s365.item_code = cp.item_code
+      ${where}
+      GROUP BY name, path
+      HAVING name IS NOT NULL AND TRIM(name) <> ''
+      ORDER BY sales_qty_30 DESC, stock_value_purchase DESC
+      LIMIT 30
+    `).all(...params).map(r => {
+      const coverage = Number(r.sales_qty_30 || 0) > 0 ? Math.round(Number(r.qty_total || 0) / (Number(r.sales_qty_30 || 0) / 30)) : null;
+      let healthy_status = 'healthy';
+      let alert = null;
+      if (coverage !== null && coverage < 21 && Number(r.sales_qty_30 || 0) > 0) { healthy_status = 'deficit'; alert = 'Низкое покрытие'; }
+      else if (coverage !== null && coverage > 180 && Number(r.sales_qty_30 || 0) < Number(r.sales_qty_365 || 0) / 12) { healthy_status = 'overstock'; alert = 'Избыточный запас'; }
+      else if (Number(r.dead_stock_sku || 0) > Math.max(3, Math.round(Number(r.sku_count || 0) * 0.3))) { healthy_status = 'dead'; alert = 'Много мёртвых SKU'; }
+      return { ...r, level: scope === 'subgroup' ? 'subgroup' : 'group', coverage_days: coverage, healthy_status, alert };
+    });
+
+    const overstock = [...segments].filter(s => s.coverage_days != null && s.coverage_days > 180).sort((a,b) => (b.coverage_days || 0) - (a.coverage_days || 0)).slice(0,5);
+    const dead = [...segments].filter(s => Number(s.dead_stock_sku || 0) > 0).sort((a,b) => Number(b.dead_stock_sku || 0) - Number(a.dead_stock_sku || 0)).slice(0,5);
+    const deficit = [...segments].filter(s => s.coverage_days != null && s.coverage_days < 21 && Number(s.sales_qty_30 || 0) > 0).sort((a,b) => Number(b.sales_qty_30 || 0) - Number(a.sales_qty_30 || 0)).slice(0,5);
+
+    const recommendations = [];
+    if (dead.length) recommendations.push({ title: 'Почистить зависшие сегменты', text: `Проверь ${dead[0].name} и соседние блоки: там заметная доля SKU без движения и замороженный капитал.`, severity: 'high' });
+    if (deficit.length) recommendations.push({ title: 'Усилить наличие лидеров', text: `Сегмент ${deficit[0].name} продаётся быстро, но покрытие низкое. Это прямой кандидат на усиление закупки.`, severity: 'high' });
+    if (overstock.length) recommendations.push({ title: 'Сжать хвост ассортимента', text: `В ${overstock[0].name} запас живёт слишком долго. Стоит пересмотреть ширину матрицы и глубину закупки.`, severity: 'medium' });
+    recommendations.push({ title: 'Смотреть сверху вниз', text: 'Используй эту страницу как верхний слой решений: сначала ассортимент целиком, потом группа, потом подгруппа, и только потом конкретные SKU.', severity: 'low' });
+
+    res.json({
+      overview,
+      segments,
+      problem_zones: { overstock, dead_stock: dead, deficit },
+      recommendations,
+    });
+  } catch (err) {
+    console.error('/api/catalog2/analytics', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/catalog2/item/:code/forecast', (req, res) => {
   try {
     const code = req.params.code.trim();

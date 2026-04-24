@@ -101,8 +101,26 @@ type C2SalesSeries = {period: string; sales: number; returns: number};
 type C2SalesData = {series: C2SalesSeries[]; has_data: boolean; gran: C2Gran};
 type Catalog2Response = {items: Catalog2Item[]; total: number; limit: number; offset: number; has_more: boolean};
 
+
+type C2AnalyticsSegment = {
+  level: 'group'|'subgroup'; path: string; name: string; sku_count: number; active_sku: number; no_sales_sku: number; dead_stock_sku: number;
+  qty_total: number; stock_value_purchase: number; stock_value_retail: number; sales_qty_30: number; sales_qty_365: number;
+  coverage_days: number|null; avg_days_since_last_sale: number|null; healthy_status: string; alert: string|null;
+};
+type C2AnalyticsSummary = {
+  overview: {
+    total_sku: number; active_sku: number; no_sales_sku: number; dead_stock_sku: number;
+    qty_total: number; stock_value_retail: number; stock_value_purchase: number;
+    total_sales_qty_30: number; total_sales_qty_365: number; coverage_days: number|null;
+    active_share: number; no_sales_share: number; dead_stock_share: number;
+  };
+  segments: C2AnalyticsSegment[];
+  problem_zones: { overstock: C2AnalyticsSegment[]; dead_stock: C2AnalyticsSegment[]; deficit: C2AnalyticsSegment[]; };
+  recommendations: { title: string; text: string; severity: 'high'|'medium'|'low'; }[];
+};
+
 type CreateMode = 'single' | 'multi';
-type TabKey = 'create' | 'drafts' | 'orders' | 'nonLiquid' | 'decisions' | 'catalog' | 'catalog2';
+type TabKey = 'create' | 'drafts' | 'orders' | 'nonLiquid' | 'decisions' | 'catalog' | 'catalog2' | 'catalogAnalytics';
 
 const currency = new Intl.NumberFormat('ru-RU');
 
@@ -116,6 +134,7 @@ function getTabFromLocation(): TabKey {
   if (hash === '/decisions' || hash === 'decisions') return 'decisions';
   if (hash === '/catalog' || hash === 'catalog') return 'catalog';
   if (hash === '/catalog2' || hash === 'catalog2') return 'catalog2';
+  if (hash === '/catalog-analytics' || hash === 'catalog-analytics') return 'catalogAnalytics';
   return 'create';
 }
 
@@ -127,6 +146,7 @@ function navigateToTab(tab: TabKey) {
     decisions: '#/decisions',
     catalog: '#/catalog',
     catalog2: '#/catalog2',
+    catalogAnalytics: '#/catalog-analytics',
     create: '#/',
   };
   window.location.hash = map[tab];
@@ -903,6 +923,198 @@ function ProductDetailModal2({
 
 // ── explain modal ─────────────────────────────────────────────────────────────
 
+function severityColor(sev: 'high'|'medium'|'low') {
+  return sev === 'high' ? '#ef4444' : sev === 'medium' ? '#f59e0b' : '#60a5fa';
+}
+
+function AnalyticsCard({label, value, sub, color = '#f8fafc'}: {label: string; value: string; sub?: string; color?: string}) {
+  return (
+    <div style={{background: '#0f172a', border: '1px solid #1e293b', borderRadius: 14, padding: '14px 16px', minHeight: 102}}>
+      <div style={{fontSize: '0.86em', color: '#94a3b8', marginBottom: 8}}>{label}</div>
+      <div style={{fontSize: '1.42em', fontWeight: 800, color, lineHeight: 1.15}}>{value}</div>
+      {sub && <div style={{fontSize: '0.88em', color: '#64748b', marginTop: 8, lineHeight: 1.45}}>{sub}</div>}
+    </div>
+  );
+}
+
+function CatalogAnalyticsView({
+  data, loading, scope, setScope, currentPath, onOpenCatalog,
+}: {
+  data: C2AnalyticsSummary | null;
+  loading: boolean;
+  scope: 'all'|'group'|'subgroup';
+  setScope: (v: 'all'|'group'|'subgroup') => void;
+  currentPath: string;
+  onOpenCatalog: (path?: string) => void;
+}) {
+  const overview = data?.overview;
+  const segments = data?.segments || [];
+  const topSegments = segments.slice(0, 8);
+  const overstock = data?.problem_zones?.overstock || [];
+  const dead = data?.problem_zones?.dead_stock || [];
+  const deficit = data?.problem_zones?.deficit || [];
+
+  return (
+    <section style={{display: 'flex', flexDirection: 'column', gap: 18}}>
+      <div style={{display: 'flex', justifyContent: 'space-between', gap: 18, alignItems: 'flex-start', flexWrap: 'wrap'}}>
+        <div style={{flex: 1, minWidth: 320}}>
+          <span className="eyebrow">Аналитика ассортимента</span>
+          <h2 style={{margin: '6px 0 10px', fontSize: '1.85em'}}>Управленческая аналитика по всему каталогу, группам и подгруппам</h2>
+          <div style={{color: '#94a3b8', fontSize: '1em', lineHeight: 1.6, maxWidth: 1000}}>
+            Здесь можно быстро понять, где ассортимент здоровый, где деньги застряли в остатках, какие сегменты растут, а какие давно не двигаются.
+            {currentPath && <span> Текущий контекст каталога: <span style={{color: '#f8fafc'}}>{currentPath}</span>.</span>}
+          </div>
+        </div>
+        <div style={{display: 'flex', gap: 8, background: '#0f172a', borderRadius: 12, padding: 6, border: '1px solid #1e293b', flexWrap: 'wrap'}}>
+          {([
+            ['all','Весь ассортимент'],
+            ['group','Группы'],
+            ['subgroup','Подгруппы'],
+          ] as const).map(([key,label]) => (
+            <button key={key} onClick={() => setScope(key)} style={{padding: '10px 14px', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.94em', background: scope === key ? '#2563eb' : 'transparent', color: scope === key ? '#fff' : '#94a3b8'}}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {loading && <div style={{padding: '30px 0', color: '#94a3b8'}}>Загрузка аналитики…</div>}
+      {!loading && overview && (
+        <>
+          <div style={{display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14}}>
+            <AnalyticsCard label="SKU в ассортименте" value={overview.total_sku.toLocaleString('ru-RU')} sub={`${overview.active_sku.toLocaleString('ru-RU')} активных · ${overview.no_sales_sku.toLocaleString('ru-RU')} без продаж`} />
+            <AnalyticsCard label="Закупочная стоимость остатков" value={`${Math.round(overview.stock_value_purchase).toLocaleString('ru-RU')} ₽`} sub={`Розничная оценка: ${Math.round(overview.stock_value_retail).toLocaleString('ru-RU')} ₽`} color="#60a5fa" />
+            <AnalyticsCard label="Продажи за 30 дней" value={`${Math.round(overview.total_sales_qty_30).toLocaleString('ru-RU')} шт.`} sub={`За 365 дней: ${Math.round(overview.total_sales_qty_365).toLocaleString('ru-RU')} шт.`} color="#22c55e" />
+            <AnalyticsCard label="Покрытие запасов" value={overview.coverage_days == null ? '—' : `${overview.coverage_days} дн.`} sub={`Dead stock: ${overview.dead_stock_share}% · Без продаж: ${overview.no_sales_share}%`} color={overview.coverage_days != null && overview.coverage_days > 180 ? '#f59e0b' : '#f8fafc'} />
+          </div>
+
+          <div style={{display: 'grid', gridTemplateColumns: '1.3fr .9fr', gap: 16, alignItems: 'stretch'}}>
+            <div style={{background: '#0f172a', border: '1px solid #1e293b', borderRadius: 14, padding: '16px 18px'}}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap'}}>
+                <div>
+                  <div style={{fontSize: '1.04em', fontWeight: 800, color: '#f8fafc'}}>Executive summary</div>
+                  <div style={{fontSize: '0.92em', color: '#94a3b8', marginTop: 4}}>Коротко: где здоровье, где риск, где деньги застряли</div>
+                </div>
+                <button onClick={() => onOpenCatalog(currentPath || undefined)} style={{padding: '9px 12px', borderRadius: 10, border: '1px solid #334155', background: '#111827', color: '#e2e8f0', cursor: 'pointer'}}>Открыть в каталоге</button>
+              </div>
+              <div style={{display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12}}>
+                <div style={{background: '#111827', borderRadius: 12, padding: '14px 16px'}}>
+                  <div style={{color: '#22c55e', fontWeight: 700, marginBottom: 8}}>Что хорошо</div>
+                  <div style={{color: '#cbd5e1', lineHeight: 1.6}}>Активный ассортимент: {overview.active_share}% SKU продаются в обозримом горизонте. Это база для фокусировки закупки и расширения сильных сегментов.</div>
+                </div>
+                <div style={{background: '#111827', borderRadius: 12, padding: '14px 16px'}}>
+                  <div style={{color: '#f59e0b', fontWeight: 700, marginBottom: 8}}>Главный риск</div>
+                  <div style={{color: '#cbd5e1', lineHeight: 1.6}}>{overview.dead_stock_sku.toLocaleString('ru-RU')} SKU выглядят как зависший запас. Это не просто мёртвые позиции, а замороженные деньги и место в матрице.</div>
+                </div>
+                <div style={{background: '#111827', borderRadius: 12, padding: '14px 16px'}}>
+                  <div style={{color: '#60a5fa', fontWeight: 700, marginBottom: 8}}>Где потенциал</div>
+                  <div style={{color: '#cbd5e1', lineHeight: 1.6}}>Сегменты с коротким покрытием и высокой продажей за 30 дней — кандидаты на усиление наличия и приоритет закупки.</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{background: '#0f172a', border: '1px solid #1e293b', borderRadius: 14, padding: '16px 18px'}}>
+              <div style={{fontSize: '1.04em', fontWeight: 800, color: '#f8fafc', marginBottom: 12}}>Рекомендации</div>
+              <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+                {(data?.recommendations || []).slice(0, 5).map((rec, idx) => (
+                  <div key={idx} style={{background: '#111827', borderRadius: 12, padding: '12px 14px', borderLeft: `4px solid ${severityColor(rec.severity)}`}}>
+                    <div style={{fontSize: '0.92em', fontWeight: 700, color: '#f8fafc', marginBottom: 6}}>{rec.title}</div>
+                    <div style={{fontSize: '0.9em', color: '#cbd5e1', lineHeight: 1.55}}>{rec.text}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16}}>
+            <div style={{background: '#0f172a', border: '1px solid #1e293b', borderRadius: 14, padding: '16px 18px'}}>
+              <div style={{fontSize: '1.04em', fontWeight: 800, color: '#f8fafc', marginBottom: 12}}>Матрица здоровья сегментов</div>
+              <div style={{display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12}}>
+                {[
+                  {title: 'Высокая продажа + низкое покрытие', items: deficit, tone: '#ef4444'},
+                  {title: 'Низкая продажа + высокий запас', items: overstock, tone: '#f59e0b'},
+                  {title: 'Нулевое движение', items: dead, tone: '#f97316'},
+                  {title: 'Стабильные лидеры', items: topSegments.filter(s => s.healthy_status === 'healthy').slice(0, 3), tone: '#22c55e'},
+                ].map(box => (
+                  <div key={box.title} style={{background: '#111827', borderRadius: 12, padding: '12px 14px'}}>
+                    <div style={{fontWeight: 700, color: box.tone, marginBottom: 8}}>{box.title}</div>
+                    <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+                      {(box.items || []).slice(0, 4).map((item, idx) => (
+                        <div key={idx} style={{fontSize: '0.9em', color: '#cbd5e1', display: 'flex', justifyContent: 'space-between', gap: 10}}>
+                          <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.name}</span>
+                          <span style={{color: '#94a3b8', flexShrink: 0}}>{item.coverage_days == null ? '—' : `${item.coverage_days} дн.`}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{background: '#0f172a', border: '1px solid #1e293b', borderRadius: 14, padding: '16px 18px'}}>
+              <div style={{fontSize: '1.04em', fontWeight: 800, color: '#f8fafc', marginBottom: 12}}>Проблемные зоны</div>
+              <div style={{display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12}}>
+                {[
+                  {label: 'Overstock', rows: overstock, color: '#f59e0b', sub: 'Запас большой, продажи слабые'},
+                  {label: 'Dead stock', rows: dead, color: '#ef4444', sub: 'Давно не было движения'},
+                  {label: 'Deficit', rows: deficit, color: '#22c55e', sub: 'Спрос есть, покрытия мало'},
+                ].map(block => (
+                  <div key={block.label} style={{background: '#111827', borderRadius: 12, padding: '12px 14px'}}>
+                    <div style={{fontWeight: 700, color: block.color, marginBottom: 4}}>{block.label}</div>
+                    <div style={{fontSize: '0.84em', color: '#64748b', marginBottom: 8}}>{block.sub}</div>
+                    <div style={{display: 'flex', flexDirection: 'column', gap: 7}}>
+                      {block.rows.slice(0, 5).map((row, idx) => (
+                        <div key={idx} style={{fontSize: '0.9em', color: '#cbd5e1', lineHeight: 1.45}}>
+                          <div style={{fontWeight: 600}}>{row.name}</div>
+                          <div style={{color: '#94a3b8'}}>SKU: {row.sku_count?.toLocaleString('ru-RU') || '—'} · покрытие: {row.coverage_days == null ? '—' : `${row.coverage_days} дн.`}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div style={{background: '#0f172a', border: '1px solid #1e293b', borderRadius: 14, padding: '16px 18px'}}>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap'}}>
+              <div>
+                <div style={{fontSize: '1.04em', fontWeight: 800, color: '#f8fafc'}}>Сегменты: группы и подгруппы</div>
+                <div style={{fontSize: '0.9em', color: '#94a3b8', marginTop: 4}}>Сравнение вклада, здоровья, покрытия и проблем по ассортиментным блокам</div>
+              </div>
+              <div style={{fontSize: '0.88em', color: '#64748b'}}>Показаны топ-{topSegments.length} по выбранному скоупу</div>
+            </div>
+            <div style={{overflowX: 'auto'}}>
+              <table style={{width: '100%', borderCollapse: 'collapse'}}>
+                <thead>
+                  <tr style={{background: '#111827'}}>
+                    {['Сегмент','SKU','Продажи 30д','Продажи 365д','Покрытие','Без продаж','Dead stock','Статус','Действие'].map(h => (
+                      <th key={h} style={{textAlign: 'left', padding: '10px 12px', color: '#94a3b8', fontSize: '0.84em', borderBottom: '1px solid #1f2937'}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {topSegments.map(seg => (
+                    <tr key={seg.path} style={{borderBottom: '1px solid #0b1220'}}>
+                      <td style={{padding: '12px', color: '#f8fafc', fontWeight: 600}}>{seg.name}</td>
+                      <td style={{padding: '12px', color: '#cbd5e1'}}>{seg.sku_count.toLocaleString('ru-RU')}</td>
+                      <td style={{padding: '12px', color: '#22c55e'}}>{Math.round(seg.sales_qty_30).toLocaleString('ru-RU')}</td>
+                      <td style={{padding: '12px', color: '#60a5fa'}}>{Math.round(seg.sales_qty_365).toLocaleString('ru-RU')}</td>
+                      <td style={{padding: '12px', color: '#cbd5e1'}}>{seg.coverage_days == null ? '—' : `${seg.coverage_days} дн.`}</td>
+                      <td style={{padding: '12px', color: '#f59e0b'}}>{seg.no_sales_sku.toLocaleString('ru-RU')}</td>
+                      <td style={{padding: '12px', color: '#ef4444'}}>{seg.dead_stock_sku.toLocaleString('ru-RU')}</td>
+                      <td style={{padding: '12px'}}><span style={{padding: '4px 8px', borderRadius: 999, background: seg.healthy_status === 'healthy' ? '#052e16' : seg.healthy_status === 'deficit' ? '#3f1212' : '#3b2f0b', color: seg.healthy_status === 'healthy' ? '#22c55e' : seg.healthy_status === 'deficit' ? '#f87171' : '#fbbf24', fontSize: '0.84em', fontWeight: 700}}>{seg.healthy_status}</span></td>
+                      <td style={{padding: '12px'}}><button onClick={() => onOpenCatalog(seg.path)} style={{padding: '8px 10px', borderRadius: 8, border: '1px solid #334155', background: '#111827', color: '#e2e8f0', cursor: 'pointer'}}>Открыть</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function ExplainModal({row, onClose}: {row: Recommendation; onClose: () => void}) {
   const parts = row.explain_text ? row.explain_text.split(' | ') : [];
   return (
@@ -1156,6 +1368,9 @@ export function App() {
   const [c2TreeSearchResults, setC2TreeSearchResults] = useState<C2GroupResult[]>([]);
   const [c2Forecast, setC2Forecast] = useState<C2Forecast | null>(null);
   const [c2ForecastLoading, setC2ForecastLoading] = useState(false);
+  const [c2Analytics, setC2Analytics] = useState<C2AnalyticsSummary | null>(null);
+  const [c2AnalyticsLoading, setC2AnalyticsLoading] = useState(false);
+  const [c2AnalyticsScope, setC2AnalyticsScope] = useState<'all'|'group'|'subgroup'>('all');
 
   // ── api helpers ─────────────────────────────────────────────────────────────
 
@@ -1261,6 +1476,20 @@ export function App() {
       setC2Sales(data);
     } catch { setC2Sales(null); }
     finally { setC2SalesLoading(false); }
+  }
+
+  async function c2LoadAnalytics(scope = c2AnalyticsScope, path = c2Path) {
+    setC2AnalyticsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('scope', scope);
+      if (path) params.set('path', path);
+      const data = await fetchJSON<C2AnalyticsSummary>(apiUrl(`/api/catalog2/analytics?${params}`));
+      setC2Analytics(data);
+    } catch (err) {
+      console.error('c2LoadAnalytics', err);
+      setC2Analytics(null);
+    } finally { setC2AnalyticsLoading(false); }
   }
 
   async function c2ToggleExpand(path: string) {
@@ -1570,6 +1799,7 @@ export function App() {
           <button className={tab === 'orders' ? 'tab active' : 'tab'} onClick={() => { setTab('orders'); navigateToTab('orders'); }}>Заявки</button>
           <button className={tab === 'catalog' ? 'tab active' : 'tab'} onClick={() => { setTab('catalog'); navigateToTab('catalog'); }}>Товары</button>
           <button className={tab === 'catalog2' ? 'tab active' : 'tab'} onClick={() => { setTab('catalog2'); navigateToTab('catalog2'); }}>Каталог</button>
+          <button className={tab === 'catalogAnalytics' ? 'tab active' : 'tab'} onClick={() => { setTab('catalogAnalytics'); navigateToTab('catalogAnalytics'); }}>Аналитика</button>
           <button className={tab === 'nonLiquid' ? 'tab active' : 'tab'} onClick={() => { setTab('nonLiquid'); navigateToTab('nonLiquid'); }}>Неликвиды</button>
           <button className={tab === 'decisions' ? 'tab active' : 'tab'} onClick={() => { setTab('decisions'); navigateToTab('decisions'); }}>Решения менеджеров</button>
         </div>
@@ -2091,6 +2321,23 @@ export function App() {
                 </tbody>
               </table>
             </div></div>
+          </section>
+        )}
+
+        {tab === 'catalogAnalytics' && (
+          <section className="card orders-card">
+            <CatalogAnalyticsView
+              data={c2Analytics}
+              loading={c2AnalyticsLoading}
+              scope={c2AnalyticsScope}
+              setScope={setC2AnalyticsScope}
+              currentPath={c2Path}
+              onOpenCatalog={(path) => {
+                setC2Path(path || '');
+                setTab('catalog2');
+                navigateToTab('catalog2');
+              }}
+            />
           </section>
         )}
 
