@@ -643,7 +643,7 @@ app.get('/api/catalog2/item/:code/sales', (req, res) => {
 
     const groupExpr =
       gran === 'day'  ? `strftime('%Y-%m-%d', sale_date)` :
-      gran === 'week' ? `strftime('%G-W%V',   sale_date)` :
+      gran === 'week' ? `strftime('%Y-W%W',   sale_date)` :
                         `strftime('%Y-%m',    sale_date)`;
 
     const rows = db.prepare(`

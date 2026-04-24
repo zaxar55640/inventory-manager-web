@@ -157,19 +157,19 @@ function ClassBadge({abc, xyz}: {abc: string; xyz: string}) {
 
 const RU_MONTHS = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
 
-function fmtPeriod(period: string, gran: C2Gran): string {
-  if (gran === 'day') {
-    // "2024-03-15" → "15 мар"
+function fmtPeriod(period: string | undefined | null, gran: C2Gran): string {
+  if (!period) return '—';
+  try {
+    if (gran === 'day') {
+      const m = parseInt(period.slice(5, 7), 10) - 1;
+      return `${period.slice(8)} ${RU_MONTHS[m] ?? ''}`;
+    }
+    if (gran === 'week') {
+      return `${period.slice(5)} '${period.slice(2, 4)}`;
+    }
     const m = parseInt(period.slice(5, 7), 10) - 1;
-    return `${period.slice(8)} ${RU_MONTHS[m]}`;
-  }
-  if (gran === 'week') {
-    // "2024-W03" → "W03 '24"
-    return `${period.slice(5)} '${period.slice(2, 4)}`;
-  }
-  // "2024-03" → "мар '24"
-  const m = parseInt(period.slice(5, 7), 10) - 1;
-  return `${RU_MONTHS[m]} '${period.slice(2, 4)}`;
+    return `${RU_MONTHS[m] ?? ''} '${period.slice(2, 4)}`;
+  } catch { return period; }
 }
 
 function SalesLineChart({series, gran}: {series: C2SalesSeries[]; gran: C2Gran}) {
