@@ -1599,6 +1599,9 @@ export function App() {
       if (!c2TreeCache.has('')) c2LoadChildren('');
       c2LoadItems(c2Path, c2Search, 0);
     }
+    if (tab === 'catalogAnalytics') {
+      c2LoadAnalytics(c2AnalyticsScope, c2Path);
+    }
   }, [tab]);
 
   useEffect(() => {
@@ -1621,6 +1624,12 @@ export function App() {
     const t = setTimeout(() => { setC2Offset(0); c2LoadItems(c2Path, c2Search, 0); }, 300);
     return () => clearTimeout(t);
   }, [c2Path, c2Search, c2SortBy, c2SortDir, c2HasStock]);
+
+  useEffect(() => {
+    if (tab !== 'catalogAnalytics') return;
+    const t = setTimeout(() => { c2LoadAnalytics(c2AnalyticsScope, c2Path); }, 120);
+    return () => clearTimeout(t);
+  }, [tab, c2AnalyticsScope, c2Path]);
 
   useEffect(() => {
     const t = setTimeout(() => c2SearchGroups(c2TreeSearch), 250);
