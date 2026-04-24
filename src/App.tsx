@@ -798,7 +798,7 @@ export function App() {
   const [c2ChartFrom, setC2ChartFrom] = useState('2024-01');
   const [c2ChartTo, setC2ChartTo] = useState(() => new Date().toISOString().slice(0, 7));
   const [c2ChartGran, setC2ChartGran] = useState<C2Gran>('month');
-  const [c2Sort, setC2Sort] = useState<{key: string; dir: 'asc'|'desc'}[]>([{key: 'item_name', dir: 'asc'}]);
+  const [c2Sort, setC2Sort] = useState<{key: string; dir: 'asc'|'desc'}[]>([{key: 'qty', dir: 'desc'}]);
   const [c2TreeSearch, setC2TreeSearch] = useState('');
   const [c2TreeSearchResults, setC2TreeSearchResults] = useState<C2GroupResult[]>([]);
 
@@ -1871,7 +1871,7 @@ export function App() {
                   />
                   {c2Sort.length > 1 && (
                     <button
-                      onClick={() => { setC2Sort([{key: 'item_name', dir: 'asc'}]); setC2Offset(0); }}
+                      onClick={() => { setC2Sort([{key: 'qty', dir: 'desc'}]); setC2Offset(0); }}
                       title="Сбросить сортировку"
                       style={{
                         flexShrink: 0, padding: '5px 9px', background: '#1e293b',
