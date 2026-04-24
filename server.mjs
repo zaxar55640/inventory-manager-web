@@ -736,13 +736,13 @@ app.get('/api/catalog2/item/:code', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Sales chart data: aggregated by day / week / month
+// Sales chart data: aggregated by day / week / month, gaps filled with zeros
 app.get('/api/catalog2/item/:code/sales', (req, res) => {
   try {
     const code = req.params.code;
-    const from = String(req.query.from || '2024-01-01');
-    const to   = String(req.query.to   || new Date().toISOString().slice(0, 10));
-    const gran = String(req.query.gran || 'month'); // day | week | month
+    const from = String(req.query.from || '2024-01-01').slice(0, 10);
+    const to   = String(req.query.to   || new Date().toISOString().slice(0, 10)).slice(0, 10);
+    const gran = String(req.query.gran || 'month');
 
     const groupExpr =
       gran === 'day'  ? `strftime('%Y-%m-%d', sale_date)` :
@@ -759,7 +759,57 @@ app.get('/api/catalog2/item/:code/sales', (req, res) => {
       ORDER BY period ASC
     `).all(code, from, to);
 
-    res.json({ series: rows, has_data: rows.length > 0, gran });
+    if (!rows.length) return res.json({ series: [], has_data: false, gran });
+
+    // Fill gaps so the chart shows the full timeline with zeros
+    const salesMap = new Map(rows.map(r => [r.period, r]));
+
+    function parseLocal(s) {
+      const [y, m, d] = s.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    }
+
+    // Matches SQLite strftime('%W'): week 01 starts on the first Monday of the year
+    function sqliteWeek(d) {
+      const year = d.getFullYear();
+      const jan1 = new Date(year, 0, 1);
+      const doy = Math.floor((d - jan1) / 86400000);
+      const jan1Day = jan1.getDay(); // 0=Sun
+      const toFirstMon = jan1Day === 1 ? 0 : jan1Day === 0 ? 1 : 8 - jan1Day;
+      if (doy < toFirstMon) return `${year}-W00`;
+      return `${year}-W${String(Math.floor((doy - toFirstMon) / 7) + 1).padStart(2, '0')}`;
+    }
+
+    const fromDate = parseLocal(from);
+    const toDate   = parseLocal(to);
+    const filled   = [];
+    const zero = { sales: 0, returns: 0 };
+
+    if (gran === 'day') {
+      for (let d = new Date(fromDate); d <= toDate; d.setDate(d.getDate() + 1)) {
+        const period = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        filled.push(salesMap.get(period) ?? { period, ...zero });
+      }
+    } else if (gran === 'week') {
+      const seen = new Set();
+      for (let d = new Date(fromDate); d <= toDate; d.setDate(d.getDate() + 1)) {
+        const period = sqliteWeek(d);
+        if (!seen.has(period)) {
+          seen.add(period);
+          filled.push(salesMap.get(period) ?? { period, ...zero });
+        }
+      }
+    } else {
+      let y = fromDate.getFullYear(), m = fromDate.getMonth() + 1;
+      const toY = toDate.getFullYear(), toM = toDate.getMonth() + 1;
+      while (y < toY || (y === toY && m <= toM)) {
+        const period = `${y}-${String(m).padStart(2, '0')}`;
+        filled.push(salesMap.get(period) ?? { period, ...zero });
+        if (++m > 12) { m = 1; y++; }
+      }
+    }
+
+    res.json({ series: filled, has_data: true, gran });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
