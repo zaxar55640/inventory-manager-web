@@ -154,6 +154,8 @@ type AnalyticsDrillItem = {
   days_since_last_sale: number|null; coverage_days: number|null;
 };
 
+type CartEntry = {item: Catalog2Item; qty: number; recommendedOrder: number};
+
 type CreateMode = 'single' | 'multi';
 type TabKey = 'create' | 'drafts' | 'orders' | 'nonLiquid' | 'decisions' | 'catalog' | 'catalog2' | 'analytics';
 
@@ -173,7 +175,8 @@ function getTabFromLocation(): TabKey {
   if (hash === '/catalog2' || hash === 'catalog2') return 'catalog2';
   if (hash === '/catalog-analytics' || hash === 'catalog-analytics') return 'analytics';
   if (hash === '/analytics' || hash === 'analytics') return 'analytics';
-  return 'create';
+  if (hash === '/' || hash === '' || hash === 'create' || hash === '/create') return 'catalog2';
+  return 'catalog2';
 }
 
 function navigateToTab(tab: TabKey) {
@@ -1969,6 +1972,11 @@ export function App() {
   const [catalogGroups, setCatalogGroups] = useState<string[]>([]);
   const CATALOG_LIMIT = 100;
 
+  // draft cart (persists across tab changes)
+  const [draftCart, setDraftCart] = useState<Map<string, CartEntry>>(new Map());
+  const [cartOpen, setCartOpen] = useState(false);
+  const [cartSubmitting, setCartSubmitting] = useState(false);
+
   // sidebar collapse
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // catalog2 tree panel collapse
@@ -2302,6 +2310,56 @@ export function App() {
     await openDraft(created.id);
   }
 
+  function cartToggle(item: Catalog2Item, recommendedOrder: number) {
+    const key = String(item.id);
+    setDraftCart(prev => {
+      const next = new Map(prev);
+      if (next.has(key)) { next.delete(key); } else { next.set(key, {item, qty: Math.max(1, recommendedOrder), recommendedOrder}); }
+      return next;
+    });
+  }
+
+  function cartUpdateQty(key: string, qty: number) {
+    setDraftCart(prev => {
+      const next = new Map(prev);
+      const e = next.get(key);
+      if (e) next.set(key, {...e, qty: Math.max(1, qty)});
+      return next;
+    });
+  }
+
+  function cartRemove(key: string) {
+    setDraftCart(prev => { const next = new Map(prev); next.delete(key); return next; });
+  }
+
+  async function cartCheckout() {
+    if (draftCart.size === 0 || cartSubmitting) return;
+    setCartSubmitting(true);
+    try {
+      const {id: draftId} = await fetchJSON<{id: number}>(apiUrl('/api/drafts'), {method: 'POST', body: JSON.stringify({draft_mode: 'multi'})});
+      for (const [, entry] of draftCart) {
+        const item = entry.item;
+        await fetchJSON(apiUrl(`/api/drafts/${draftId}/catalog-items`), {
+          method: 'POST',
+          body: JSON.stringify({item: {
+            item_ref: item.item_code?.trim() || String(item.id),
+            sku_name: item.item_name,
+            norm_name: item.parent_name || item.group_l0 || '',
+            recommended_qty: entry.recommendedOrder,
+            manager_qty: entry.qty,
+          }}),
+        });
+      }
+      setDraftCart(new Map());
+      setCartOpen(false);
+      await loadDrafts();
+      await openDraft(draftId);
+      setTab('drafts');
+      navigateToTab('drafts');
+    } catch(e) { console.error(e); }
+    finally { setCartSubmitting(false); }
+  }
+
   async function addRecommendationToDraft(row: Recommendation) {
     if (!currentDraft || addingId !== null) return;
     setAddingId(row.id);
@@ -2449,12 +2507,15 @@ export function App() {
           )}
         </div>
         <div className="panel">
-          <button className={tab === 'create' ? 'tab active' : 'tab'} onClick={() => { setTab('create'); navigateToTab('create'); if (!currentDraft) setMode(null); }}>Новая заявка</button>
-          <button className={tab === 'drafts' ? 'tab active' : 'tab'} onClick={() => { setTab('drafts'); navigateToTab('drafts'); }}>Драфты</button>
-          <button className={tab === 'orders' ? 'tab active' : 'tab'} onClick={() => { setTab('orders'); navigateToTab('orders'); }}>Заявки</button>
-          <button className={tab === 'catalog' ? 'tab active' : 'tab'} onClick={() => { setTab('catalog'); navigateToTab('catalog'); }}>Товары</button>
           <button className={tab === 'catalog2' ? 'tab active' : 'tab'} onClick={() => { setTab('catalog2'); navigateToTab('catalog2'); }}>Каталог</button>
-          <button className={tab === 'analytics' ? 'tab active' : 'tab'} onClick={() => { setTab('analytics'); navigateToTab('analytics'); }}>Аналитика склада</button>
+          <button className={`${tab === 'drafts' ? 'tab active' : 'tab'}${draftCart.size > 0 ? ' tab-with-badge' : ''}`}
+            style={{position:'relative'}}
+            onClick={() => { setTab('drafts'); navigateToTab('drafts'); }}>
+            Черновики
+          </button>
+          <button className={tab === 'orders' ? 'tab active' : 'tab'} onClick={() => { setTab('orders'); navigateToTab('orders'); }}>Заявки</button>
+          <button className={tab === 'analytics' ? 'tab active' : 'tab'} onClick={() => { setTab('analytics'); navigateToTab('analytics'); }}>Аналитика</button>
+          <button className={tab === 'catalog' ? 'tab active' : 'tab'} onClick={() => { setTab('catalog'); navigateToTab('catalog'); }}>Товары (старый)</button>
           <button className={tab === 'nonLiquid' ? 'tab active' : 'tab'} onClick={() => { setTab('nonLiquid'); navigateToTab('nonLiquid'); }}>Неликвиды</button>
           <button className={tab === 'decisions' ? 'tab active' : 'tab'} onClick={() => { setTab('decisions'); navigateToTab('decisions'); }}>Решения менеджеров</button>
         </div>
@@ -2671,23 +2732,107 @@ export function App() {
         )}
 
         {/* ── DRAFTS TAB ─────────────────────────────────────────────────── */}
-        {tab === 'drafts' && (
+        {tab === 'drafts' && !currentDraft && (
           <section className="card orders-card">
-            <div className="section-head"><div><span className="eyebrow">Драфты</span><h2>Незавершённые заявки</h2></div></div>
+            <div className="section-head">
+              <div><span className="eyebrow">Черновики</span><h2>Незавершённые заявки</h2></div>
+              <button className="ghost-btn" style={{alignSelf:'flex-start'}}
+                onClick={() => { setTab('catalog2'); navigateToTab('catalog2'); }}>
+                + Набрать товары из каталога
+              </button>
+            </div>
+            {drafts.length === 0 && (
+              <div style={{padding: '40px 16px', textAlign: 'center', color: '#475569'}}>
+                Нет черновиков. Выберите товары в <span style={{color:'#60a5fa',cursor:'pointer'}} onClick={() => {setTab('catalog2');navigateToTab('catalog2');}}>Каталоге</span> и нажмите «Перейти к заявке».
+              </div>
+            )}
             <div className="orders-grid">
               {drafts.map(d => (
                 <article key={d.id} className="order-tile">
                   <div>
-                    <div className="status-badge">draft</div>
-                    <h3>#{d.id} · {d.draft_mode}</h3>
+                    <div className="status-badge">черновик</div>
+                    <h3>#{d.id} · {d.draft_mode === 'multi' ? 'мульти' : 'один поставщик'}</h3>
                     <p>{d.items_count} позиций · {currency.format(d.total_qty || 0)} шт</p>
                     <span className="meta">{new Date(d.created_at).toLocaleString('ru-RU')}</span>
                   </div>
-                  <button className="primary ghost" onClick={() => openDraft(d.id)}>Открыть</button>
+                  <div className="inline-actions">
+                    <button className="primary ghost" onClick={() => openDraft(d.id)}>Открыть</button>
+                  </div>
                 </article>
               ))}
             </div>
           </section>
+        )}
+
+        {tab === 'drafts' && currentDraft && (
+          <>
+            <section className="card search-card">
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Черновик заявки</span>
+                  <h2>Заявка #{currentDraft.batch.id}</h2>
+                  <div className="meta">{currentDraft.items.length} позиций · {currentDraft.batch.draft_mode === 'multi' ? 'мульти-поставщик' : currentDraft.batch.supplier_name || 'поставщик не указан'}</div>
+                </div>
+                <button className="ghost-btn" style={{alignSelf:'flex-start'}}
+                  onClick={() => setCurrentDraft(null)}>← К списку черновиков</button>
+              </div>
+            </section>
+
+            {/* draft items */}
+            <section ref={draftItemsRef} className="card orders-card">
+              <div className="section-head">
+                <div><span className="eyebrow">Состав заявки</span><h2>Товары</h2></div>
+                <label style={{display: 'flex', gap: 8, alignItems: 'center'}}>
+                  <span className="meta">Поиск</span>
+                  <input value={listSearch} onChange={e => setListSearch(e.target.value)} placeholder="Фильтр"
+                    style={{padding: '4px 8px', borderRadius: 6, border: '1px solid #334155', background: '#0f172a', color: '#f1f5f9'}} />
+                </label>
+              </div>
+              {filteredCurrentItems.length === 0 && (
+                <div style={{padding: '24px 16px', textAlign: 'center', color: '#475569', fontSize: '0.88em'}}>
+                  Нет позиций. <span style={{color:'#60a5fa',cursor:'pointer'}} onClick={() => {setTab('catalog2');navigateToTab('catalog2');}}>Вернуться в каталог</span>
+                </div>
+              )}
+              <div className="search-results">
+                {filteredCurrentItems.map(item => (
+                  <div key={item.id} className="search-item">
+                    <div>
+                      <strong>{item.sku_name}</strong>
+                      <div className="meta" style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                        {item.item_ref && <span style={{color:'#334155',fontFamily:'monospace'}}>{item.item_ref}</span>}
+                        <span>Рекоменд.: {item.recommended_qty} шт</span>
+                        {item.manager_qty !== item.recommended_qty && (
+                          <span style={{color: item.manager_qty < item.recommended_qty ? '#ef4444' : '#22c55e', fontWeight: 600}}>
+                            → Менеджер: {item.manager_qty} шт
+                          </span>
+                        )}
+                        {item.reason && <span style={{color: '#94a3b8'}}>— {item.reason}</span>}
+                      </div>
+                    </div>
+                    <div className="inline-actions">
+                      <button
+                        title="Изменить количество"
+                        onClick={() => setEditQtyState({item})}
+                        style={{padding: '5px 12px', borderRadius: 6, border: '1px solid #334155', background: '#0f172a', color: '#94a3b8', cursor: 'pointer', fontSize: '0.85em'}}>
+                        ✏ {item.manager_qty} шт
+                      </button>
+                      <button className="danger-btn" onClick={() => removeDraftItem(item.id)}>🗑</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="card footer-actions">
+              <button className="ghost-btn" onClick={() => { setTab('catalog2'); navigateToTab('catalog2'); }}>
+                + Добавить из каталога
+              </button>
+              <button className="primary ghost" onClick={submitDraft}
+                disabled={currentDraft.items.length === 0}>
+                Создать заявку →
+              </button>
+            </section>
+          </>
         )}
 
         {/* ── ORDERS TAB ─────────────────────────────────────────────────── */}
@@ -3142,6 +3287,7 @@ export function App() {
                 <table style={{width: '100%', borderCollapse: 'collapse', fontSize: '0.83em'}}>
                   <thead>
                     <tr style={{background: '#0a1628', position: 'sticky', top: 0, zIndex: 4}}>
+                      <th style={{padding: '7px 6px 7px 10px', width: 28, borderBottom: '1px solid #1e293b'}}/>
                       {([
                         {label: 'Название', key: 'item_name', right: false},
                         {label: 'Код / ШК', key: null, right: false},
@@ -3201,7 +3347,9 @@ export function App() {
                         ? Math.max(0, Math.ceil(recommendedStock - (item.qty || 0)))
                         : Math.max(0, item.to_order ?? item.forecast_to_order ?? 0);
                       const days = item.days_since_last_sale;
-                      const rowBase = days === null ? 'rgba(239,68,68,.09)'
+                      const inCart = draftCart.has(String(item.id));
+                      const rowBase = inCart ? 'rgba(37,99,235,.14)'
+                        : days === null ? 'rgba(239,68,68,.09)'
                         : days >= 365 ? 'rgba(239,68,68,.09)'
                         : days >= 120 ? 'rgba(234,179,8,.07)'
                         : undefined;
@@ -3209,10 +3357,16 @@ export function App() {
                         <tr
                           key={item.id}
                           onClick={() => setC2Modal(item)}
-                          style={{cursor: 'pointer', borderBottom: '1px solid #0f172a', background: rowBase, transition: 'background .1s'}}
-                          onMouseEnter={e => ((e.currentTarget as HTMLElement).style.background = '#1e293b')}
+                          style={{cursor: 'pointer', borderBottom: '1px solid #0f172a', background: rowBase, transition: 'background .1s',
+                            outline: inCart ? '1px solid rgba(37,99,235,.4)' : undefined}}
+                          onMouseEnter={e => ((e.currentTarget as HTMLElement).style.background = inCart ? 'rgba(37,99,235,.22)' : '#1e293b')}
                           onMouseLeave={e => ((e.currentTarget as HTMLElement).style.background = rowBase || '')}
                         >
+                          <td style={{padding: '7px 6px 7px 10px', width: 28}} onClick={e => {e.stopPropagation(); cartToggle(item, recommendedOrder);}}>
+                            <div style={{width:17,height:17,borderRadius:4,border:`2px solid ${inCart?'#2563eb':'#334155'}`,background:inCart?'#2563eb':'transparent',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',transition:'all .1s',flexShrink:0}}>
+                              {inCart && <span style={{color:'#fff',fontSize:'0.7em',fontWeight:900,lineHeight:1}}>✓</span>}
+                            </div>
+                          </td>
                           <td style={{padding: '7px 10px', maxWidth: 300, color: '#e2e8f0'}}>
                             <div style={{fontWeight: 500, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.item_name}</div>
                           </td>
@@ -3301,6 +3455,108 @@ export function App() {
         )}
 
       </main>
+
+      {/* ── Floating draft cart ─────────────────────────────────────────── */}
+      {draftCart.size > 0 && (
+        <div style={{
+          position: 'fixed', right: 20, bottom: 20, zIndex: 1000,
+          background: '#0d1f3c', border: '1px solid #1d4ed8', borderRadius: 14,
+          boxShadow: '0 8px 32px rgba(0,0,0,.6)', minWidth: 280, maxWidth: 400,
+          maxHeight: cartOpen ? '70vh' : 'auto',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          transition: 'max-height .2s ease',
+        }}>
+          {/* header */}
+          <div
+            onClick={() => setCartOpen(v => !v)}
+            style={{padding: '11px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              cursor: 'pointer', background: '#0a1628', borderBottom: cartOpen ? '1px solid #1e293b' : 'none',
+              userSelect: 'none'}}
+          >
+            <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
+              <span style={{display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: 22, height: 22, borderRadius: '50%', background: '#2563eb', color: '#fff',
+                fontSize: '0.72em', fontWeight: 700}}>{draftCart.size}</span>
+              <span style={{fontWeight: 700, color: '#f1f5f9', fontSize: '0.9em'}}>
+                {draftCart.size === 1 ? '1 позиция в заявке' : `${draftCart.size} позиций в заявке`}
+              </span>
+            </div>
+            <span style={{color: '#64748b', fontSize: '0.75em'}}>{cartOpen ? '▾' : '▴'}</span>
+          </div>
+
+          {/* body */}
+          {cartOpen && (
+            <div style={{overflowY: 'auto', flex: 1}}>
+              {Array.from(draftCart.entries()).map(([key, entry]) => (
+                <div key={key} style={{display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '7px 14px', borderBottom: '1px solid #1e293b'}}>
+                  <div style={{flex: 1, overflow: 'hidden', minWidth: 0}}>
+                    <div style={{color: '#e2e8f0', fontSize: '0.8em', overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={entry.item.item_name}>
+                      {entry.item.item_name}
+                    </div>
+                    {entry.item.item_code?.trim() && (
+                      <div style={{color: '#334155', fontSize: '0.7em', fontFamily: 'monospace'}}>{entry.item.item_code.trim()}</div>
+                    )}
+                    {entry.recommendedOrder > 0 && entry.qty !== entry.recommendedOrder && (
+                      <div style={{color: '#64748b', fontSize: '0.68em'}}>рекоменд.: {entry.recommendedOrder} шт</div>
+                    )}
+                  </div>
+                  <div style={{display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0}}>
+                    <button
+                      onClick={() => cartUpdateQty(key, entry.qty - 1)}
+                      style={{width: 22, height: 22, borderRadius: 5, border: '1px solid #334155', background: '#0f172a',
+                        color: '#94a3b8', cursor: 'pointer', fontWeight: 700, fontSize: '0.85em',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0}}
+                    >−</button>
+                    <input
+                      type="number" min={1} value={entry.qty}
+                      onChange={e => cartUpdateQty(key, parseInt(e.target.value) || 1)}
+                      onClick={e => e.stopPropagation()}
+                      style={{width: 50, padding: '2px 5px', borderRadius: 5, border: '1px solid #334155',
+                        background: '#0a1628', color: '#f1f5f9', textAlign: 'center', fontSize: '0.85em',
+                        appearance: 'textfield'}}
+                    />
+                    <button
+                      onClick={() => cartUpdateQty(key, entry.qty + 1)}
+                      style={{width: 22, height: 22, borderRadius: 5, border: '1px solid #334155', background: '#0f172a',
+                        color: '#94a3b8', cursor: 'pointer', fontWeight: 700, fontSize: '0.85em',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0}}
+                    >+</button>
+                  </div>
+                  <button
+                    onClick={() => cartRemove(key)}
+                    style={{background: 'none', border: 'none', color: '#475569', cursor: 'pointer',
+                      padding: '2px 4px', fontSize: '1em', flexShrink: 0, lineHeight: 1}}
+                    title="Убрать"
+                  >✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* footer */}
+          <div style={{padding: '10px 14px', borderTop: cartOpen ? '1px solid #1e293b' : 'none',
+            background: '#0a1628', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8}}>
+            {cartOpen && (
+              <button
+                onClick={() => { setDraftCart(new Map()); setCartOpen(false); }}
+                style={{background: 'none', border: '1px solid #334155', borderRadius: 7, color: '#64748b',
+                  padding: '6px 12px', cursor: 'pointer', fontSize: '0.78em'}}
+              >Очистить</button>
+            )}
+            <button
+              onClick={cartCheckout}
+              disabled={cartSubmitting}
+              style={{flex: 1, padding: '8px 16px', borderRadius: 8, background: cartSubmitting ? '#1d4ed8' : '#2563eb',
+                color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.88em',
+                opacity: cartSubmitting ? 0.7 : 1}}
+            >
+              {cartSubmitting ? 'Создаю заявку…' : 'Перейти к заявке →'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

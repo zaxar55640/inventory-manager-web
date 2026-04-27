@@ -406,6 +406,20 @@ app.delete('/api/drafts/:id/items/:itemId', (req, res) => {
   res.json({ok: true});
 });
 
+// Add catalog item to draft (no recommendation_id required)
+app.post('/api/drafts/:id/catalog-items', (req, res) => {
+  const {item} = req.body;
+  if (!item || !item.item_ref) return res.status(400).json({error: 'item_ref required'});
+  const existing = db.prepare(`SELECT id FROM purchase_order_items WHERE batch_id = ? AND item_ref = ? AND recommendation_id IS NULL`).get(req.params.id, item.item_ref);
+  if (existing) {
+    db.prepare(`UPDATE purchase_order_items SET manager_qty = ?, final_qty = ? WHERE id = ?`).run(item.manager_qty || 1, item.manager_qty || 1, existing.id);
+    return res.json({ok: true, existing: true, id: existing.id});
+  }
+  const result = db.prepare(`INSERT INTO purchase_order_items (batch_id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, item_status, reason) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'draft', '')`)
+    .run(req.params.id, item.item_ref, item.sku_name || '', item.norm_name || '', item.recommended_qty || 0, item.manager_qty || 1, item.manager_qty || 1);
+  res.json({ok: true, id: result.lastInsertRowid});
+});
+
 app.get('/api/orders', (_req, res) => {
   const rows = db.prepare(`
     SELECT b.id, b.supplier_name, b.status, b.created_at,
