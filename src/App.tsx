@@ -3671,8 +3671,8 @@ export function App() {
 
       </main>
 
-      {/* ── Floating draft cart ─────────────────────────────────────────── */}
-      {draftCart.size > 0 && (
+      {/* ── Floating draft cart — only in catalog ──────────────────────── */}
+      {draftCart.size > 0 && tab === 'catalog2' && (
         <div style={{
           position: 'fixed', right: 20, bottom: 20, zIndex: 1000,
           background: '#0d1f3c', border: '1px solid #1d4ed8', borderRadius: 14,
