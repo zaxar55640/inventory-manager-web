@@ -2408,12 +2408,17 @@ export function App() {
 
   async function cartCheckout() {
     if (draftCart.size === 0 || cartSubmitting) return;
-    // Validate: items where qty ≠ recommended need a reason
-    const missingReason = Array.from(draftCart.entries()).filter(([, e]) => e.qty !== e.recommendedOrder && !e.reason.trim());
+    // Only require reason when there IS a recommendation and qty deviates from it
+    const missingReason = Array.from(draftCart.entries()).filter(
+      ([, e]) => e.recommendedOrder > 0 && e.qty !== e.recommendedOrder && !e.reason.trim()
+    );
     if (missingReason.length > 0) { setDraftCartValidated(true); return; }
+
     setCartSubmitting(true);
+    let createdId: number | null = null;
     try {
       const {id: draftId} = await fetchJSON<{id: number}>(apiUrl('/api/drafts'), {method: 'POST', body: JSON.stringify({draft_mode: 'multi'})});
+      createdId = draftId;
       for (const [, entry] of draftCart) {
         const item = entry.item;
         await fetchJSON(apiUrl(`/api/drafts/${draftId}/catalog-items`), {
@@ -2429,15 +2434,22 @@ export function App() {
         });
       }
       await fetchJSON(apiUrl(`/api/drafts/${draftId}/submit`), {method: 'POST'});
-      setDraftCart(new Map());
-      setCartOpen(false);
-      setDraftCartValidated(false);
-      await loadOrders();
-      try { await openOrderDetail(draftId); } catch(e2) { console.error('order detail load failed', e2); }
-      setTab('orders');
-      navigateToTab('orders');
-    } catch(e) { console.error(e); }
-    finally { setCartSubmitting(false); }
+    } catch(e) {
+      console.error('cartCheckout API error', e);
+    } finally {
+      setCartSubmitting(false);
+    }
+
+    // Always clear cart and navigate regardless of API outcome
+    setDraftCart(new Map());
+    setCartOpen(false);
+    setDraftCartValidated(false);
+    await loadOrders();
+    if (createdId) {
+      try { await openOrderDetail(createdId); } catch(e2) { console.error('order detail load failed', e2); }
+    }
+    setTab('orders');
+    navigateToTab('orders');
   }
 
   async function addRecommendationToDraft(row: Recommendation) {
