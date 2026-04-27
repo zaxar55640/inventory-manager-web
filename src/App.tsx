@@ -2038,6 +2038,20 @@ export function App() {
     } catch (err) { console.error('c2LoadChildren', err); }
   }
 
+  async function resolveCatalogPath(path: string, parentHint = '') {
+    if (!path) return '';
+    try {
+      const candidates = await fetchJSON<C2GroupResult[]>(apiUrl(`/api/catalog2/search-groups?q=${encodeURIComponent(path.split(' / ').filter(Boolean).pop() || path)}`));
+      const normalizedPath = normalizeCatalogPath(path);
+      const normalizedParent = normalizeCatalogPath(parentHint);
+      const exact = candidates.find(c => normalizeCatalogPath(c.path) === normalizedPath);
+      if (exact) return exact.path;
+      const scoped = candidates.find(c => normalizeCatalogPath(c.path).startsWith(normalizedParent) && normalizeCatalogPath(c.path).endsWith(normalizeCatalogPath(path).split(' / ').slice(-1)[0] || ''));
+      if (scoped) return scoped.path;
+    } catch {}
+    return path;
+  }
+
   async function c2LoadItems(path: string, q: string, offset: number, sortBy = c2SortBy, sortDir = c2SortDir, hasStock = c2HasStock) {
     const params = new URLSearchParams();
     if (path) params.set('path', path);
@@ -3217,7 +3231,7 @@ export function App() {
 
         {/* ── ANALYTICS TAB ─────────────────────────────────────────────── */}
         {tab === 'analytics' && (
-          <AnalyticsPage initialPath={analyticsReturnPath} onOpenCatalog={(path, analyticsPath) => { setAnalyticsReturnPath(analyticsPath || path || ''); setC2Path(path || ''); setTab('catalog2'); navigateToTab('catalog2'); }}/>
+          <AnalyticsPage initialPath={analyticsReturnPath} onOpenCatalog={async (path, analyticsPath) => { const resolved = await resolveCatalogPath(path || '', analyticsPath || ''); setAnalyticsReturnPath(analyticsPath || path || ''); setC2Path(resolved || path || ''); setTab('catalog2'); navigateToTab('catalog2'); }}/>
         )}
 
       </main>
