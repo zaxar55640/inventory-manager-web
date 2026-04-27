@@ -119,8 +119,43 @@ type C2AnalyticsSummary = {
   recommendations: { title: string; text: string; severity: 'high'|'medium'|'low'; }[];
 };
 
+type AnalyticsAction = {
+  title: string;
+  text: string;
+  severity: 'high'|'medium'|'low';
+};
+
+type AnalyticsSegmentBucket = {
+  label: string;
+  tone: string;
+  items: C2AnalyticsSegment[];
+};
+
+// ── new analytics types ───────────────────────────────────────────────────────
+type ASegment = { count: number; value: number };
+type AnalyticsSummary = {
+  segments: { normal: ASegment; overstock_only: ASegment; nlq_only: ASegment; both: ASegment };
+  pre_season_count: number; total_with_stock: number; total_stock_value: number;
+};
+type AnalyticsSaleRow = { year: number; month: number; net_qty: number; revenue: number };
+type AnalyticsSupplier = {
+  supplier_name: string; items_with_stock: number;
+  nlq_count: number; nlq_value: number; nlq_pct: number;
+  overstock_count: number; overstock_value: number; os_pct: number;
+  both_count: number; total_value: number;
+  abc_a_count: number; xyz_x_count: number; pre_season_count: number; score: number;
+};
+type AnalyticsDrillItem = {
+  id: number; item_code: string|null; item_name: string; barcode: string|null;
+  qty: number; purchase_price: number; retail_price: number;
+  parent_name: string|null; group_l0: string|null; group_full_path: string|null;
+  forecast_day_matrix: number|null; abc_class: string|null; xyz_class: string|null;
+  forecast_to_order: number|null; last_sale_date: string|null;
+  days_since_last_sale: number|null; coverage_days: number|null;
+};
+
 type CreateMode = 'single' | 'multi';
-type TabKey = 'create' | 'drafts' | 'orders' | 'nonLiquid' | 'decisions' | 'catalog' | 'catalog2' | 'catalogAnalytics';
+type TabKey = 'create' | 'drafts' | 'orders' | 'nonLiquid' | 'decisions' | 'catalog' | 'catalog2' | 'catalogAnalytics' | 'analytics';
 
 const currency = new Intl.NumberFormat('ru-RU');
 
@@ -135,6 +170,7 @@ function getTabFromLocation(): TabKey {
   if (hash === '/catalog' || hash === 'catalog') return 'catalog';
   if (hash === '/catalog2' || hash === 'catalog2') return 'catalog2';
   if (hash === '/catalog-analytics' || hash === 'catalog-analytics') return 'catalogAnalytics';
+  if (hash === '/analytics' || hash === 'analytics') return 'analytics';
   return 'create';
 }
 
@@ -147,6 +183,7 @@ function navigateToTab(tab: TabKey) {
     catalog: '#/catalog',
     catalog2: '#/catalog2',
     catalogAnalytics: '#/catalog-analytics',
+    analytics: '#/analytics',
     create: '#/',
   };
   window.location.hash = map[tab];
@@ -954,6 +991,70 @@ function CatalogAnalyticsView({
   const dead = data?.problem_zones?.dead_stock || [];
   const deficit = data?.problem_zones?.deficit || [];
 
+  const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    setExpandedSegments(new Set());
+  }, [scope, currentPath, data]);
+
+  const sortedBySales = [...segments].sort((a, b) => (b.sales_qty_30 || 0) - (a.sales_qty_30 || 0));
+  const sortedByStockValue = [...segments].sort((a, b) => (b.stock_value_purchase || 0) - (a.stock_value_purchase || 0));
+  const sortedByDead = [...segments].sort((a, b) => (b.dead_stock_sku || 0) - (a.dead_stock_sku || 0));
+  const sortedByNoSalesShare = [...segments].sort((a, b) => {
+    const aShare = a.sku_count > 0 ? a.no_sales_sku / a.sku_count : 0;
+    const bShare = b.sku_count > 0 ? b.no_sales_sku / b.sku_count : 0;
+    return bShare - aShare;
+  });
+
+  const priorityActions: AnalyticsAction[] = [
+    ...(data?.recommendations || []).slice(0, 3),
+    ...(deficit[0] ? [{
+      title: `Усилить наличие в ${deficit[0].name}`,
+      text: `В сегменте есть спрос, но покрытие всего ${deficit[0].coverage_days == null ? '—' : `${deficit[0].coverage_days} дн.`}. Это кандидат на быстрый пересмотр закупки и приоритета наличия.`,
+      severity: 'high' as const,
+    }] : []),
+    ...(overstock[0] ? [{
+      title: `Остановить раздувание остатка в ${overstock[0].name}`,
+      text: `Тут деньги уже лежат в запасе: закупочная стоимость ${Math.round(overstock[0].stock_value_purchase || 0).toLocaleString('ru-RU')} ₽ при слабой скорости движения.`,
+      severity: 'medium' as const,
+    }] : []),
+  ].slice(0, 5);
+
+  const insightBuckets: AnalyticsSegmentBucket[] = [
+    {label: 'Сильные по спросу', tone: '#22c55e', items: sortedBySales.slice(0, 4)},
+    {label: 'Тяжёлые по деньгам', tone: '#60a5fa', items: sortedByStockValue.slice(0, 4)},
+    {label: 'Зависшие сегменты', tone: '#ef4444', items: sortedByDead.slice(0, 4)},
+    {label: 'Много SKU без продаж', tone: '#f59e0b', items: sortedByNoSalesShare.slice(0, 4)},
+  ];
+
+  function toggleSegment(path: string) {
+    setExpandedSegments(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path); else next.add(path);
+      return next;
+    });
+  }
+
+  function segmentPracticalTakeaway(seg: C2AnalyticsSegment) {
+    if (seg.healthy_status === 'deficit') {
+      return 'Сегмент продаётся, но может недобирать выручку из-за низкого покрытия. Тут важнее не расширять матрицу, а не терять наличие.';
+    }
+    if (seg.healthy_status === 'healthy') {
+      return 'Сегмент выглядит здоровым: его можно использовать как ориентир для масштабирования и сравнения с более слабыми блоками.';
+    }
+    if ((seg.dead_stock_sku || 0) > 0 || (seg.no_sales_sku || 0) > Math.max(2, Math.round(seg.sku_count * 0.3))) {
+      return 'Здесь уже чувствуется мёртвый хвост. Нужен разбор конкретных товаров: что выводить, что распродавать, а что просто перестать докупать.';
+    }
+    return 'Сегмент требует ручного разбора на уровне конкретных товаров: посмотреть лидеры, зависшие SKU и фактическую ценность остатков.';
+  }
+
+  function segmentActionLabel(seg: C2AnalyticsSegment) {
+    if (seg.healthy_status === 'deficit') return 'Открыть и посмотреть товары к усилению';
+    if ((seg.dead_stock_sku || 0) > 0) return 'Открыть и разобрать зависшие товары';
+    if (seg.healthy_status === 'healthy') return 'Открыть и посмотреть лидеры сегмента';
+    return 'Открыть сегмент';
+  }
+
   return (
     <section style={{display: 'flex', flexDirection: 'column', gap: 18}}>
       <div className="analytics-split" style={{display: 'flex', justifyContent: 'space-between', gap: 18, alignItems: 'flex-start', flexWrap: 'wrap'}}>
@@ -991,30 +1092,30 @@ function CatalogAnalyticsView({
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap'}}>
                 <div>
                   <div style={{fontSize: '1.04em', fontWeight: 800, color: '#f8fafc'}}>Executive summary</div>
-                  <div style={{fontSize: '0.92em', color: '#94a3b8', marginTop: 4}}>Коротко: где здоровье, где риск, где деньги застряли</div>
+                  <div style={{fontSize: '0.92em', color: '#94a3b8', marginTop: 4}}>Коротко: что происходит, почему это важно и куда смотреть дальше</div>
                 </div>
                 <button onClick={() => onOpenCatalog(currentPath || undefined)} style={{padding: '9px 12px', borderRadius: 10, border: '1px solid #334155', background: '#111827', color: '#e2e8f0', cursor: 'pointer'}}>Открыть в каталоге</button>
               </div>
               <div className="analytics-grid-3" style={{display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12}}>
                 <div className="analytics-summary-card" style={{background: '#111827', borderRadius: 12, padding: '14px 16px'}}>
                   <div style={{color: '#22c55e', fontWeight: 700, marginBottom: 8}}>Что хорошо</div>
-                  <div style={{color: '#cbd5e1', lineHeight: 1.6}}>Активный ассортимент: {overview.active_share}% SKU продаются в обозримом горизонте. Это база для фокусировки закупки и расширения сильных сегментов.</div>
+                  <div style={{color: '#cbd5e1', lineHeight: 1.6}}>Активный ассортимент: {overview.active_share}% SKU продаются в обозримом горизонте. Это база, от которой можно масштабировать сильные сегменты, а не распыляться по всей матрице.</div>
                 </div>
                 <div className="analytics-summary-card" style={{background: '#111827', borderRadius: 12, padding: '14px 16px'}}>
                   <div style={{color: '#f59e0b', fontWeight: 700, marginBottom: 8}}>Главный риск</div>
-                  <div style={{color: '#cbd5e1', lineHeight: 1.6}}>{overview.dead_stock_sku.toLocaleString('ru-RU')} SKU выглядят как зависший запас. Это не просто мёртвые позиции, а замороженные деньги и место в матрице.</div>
+                  <div style={{color: '#cbd5e1', lineHeight: 1.6}}>{overview.dead_stock_sku.toLocaleString('ru-RU')} SKU выглядят как зависший запас. Это замороженные деньги, и дальше уже важно не просто видеть цифру, а проваливаться в конкретные сегменты и товары.</div>
                 </div>
                 <div className="analytics-summary-card" style={{background: '#111827', borderRadius: 12, padding: '14px 16px'}}>
                   <div style={{color: '#60a5fa', fontWeight: 700, marginBottom: 8}}>Где потенциал</div>
-                  <div style={{color: '#cbd5e1', lineHeight: 1.6}}>Сегменты с коротким покрытием и высокой продажей за 30 дней — кандидаты на усиление наличия и приоритет закупки.</div>
+                  <div style={{color: '#cbd5e1', lineHeight: 1.6}}>Сегменты с коротким покрытием и высокой продажей за 30 дней — кандидаты на усиление наличия. Ниже можно открыть их и посмотреть, о каких именно товарных кластерах идёт речь.</div>
                 </div>
               </div>
             </div>
 
             <div style={{background: '#0f172a', border: '1px solid #1e293b', borderRadius: 14, padding: '16px 18px'}}>
-              <div style={{fontSize: '1.04em', fontWeight: 800, color: '#f8fafc', marginBottom: 12}}>Рекомендации</div>
+              <div style={{fontSize: '1.04em', fontWeight: 800, color: '#f8fafc', marginBottom: 12}}>Что делать</div>
               <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
-                {(data?.recommendations || []).slice(0, 5).map((rec, idx) => (
+                {priorityActions.map((rec, idx) => (
                   <div className="analytics-reco-card" key={idx} style={{background: '#111827', borderRadius: 12, padding: '12px 14px', borderLeft: `4px solid ${severityColor(rec.severity)}`}}>
                     <div style={{fontSize: '0.92em', fontWeight: 700, color: '#f8fafc', marginBottom: 6}}>{rec.title}</div>
                     <div style={{fontSize: '0.9em', color: '#cbd5e1', lineHeight: 1.55}}>{rec.text}</div>
@@ -1050,21 +1151,17 @@ function CatalogAnalyticsView({
             </div>
 
             <div style={{background: '#0f172a', border: '1px solid #1e293b', borderRadius: 14, padding: '16px 18px'}}>
-              <div style={{fontSize: '1.04em', fontWeight: 800, color: '#f8fafc', marginBottom: 12}}>Проблемные зоны</div>
-              <div className="analytics-problems" style={{display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12}}>
-                {[
-                  {label: 'Overstock', rows: overstock, color: '#f59e0b', sub: 'Запас большой, продажи слабые'},
-                  {label: 'Dead stock', rows: dead, color: '#ef4444', sub: 'Давно не было движения'},
-                  {label: 'Deficit', rows: deficit, color: '#22c55e', sub: 'Спрос есть, покрытия мало'},
-                ].map(block => (
+              <div style={{fontSize: '1.04em', fontWeight: 800, color: '#f8fafc', marginBottom: 12}}>Куда смотреть подробнее</div>
+              <div className="analytics-problems" style={{display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12}}>
+                {insightBuckets.map(block => (
                   <div className="analytics-problem-card" key={block.label} style={{background: '#111827', borderRadius: 12, padding: '12px 14px'}}>
-                    <div style={{fontWeight: 700, color: block.color, marginBottom: 4}}>{block.label}</div>
-                    <div style={{fontSize: '0.84em', color: '#64748b', marginBottom: 8}}>{block.sub}</div>
+                    <div style={{fontWeight: 700, color: block.tone, marginBottom: 4}}>{block.label}</div>
+                    <div style={{fontSize: '0.84em', color: '#64748b', marginBottom: 8}}>Нажми на сегмент ниже в таблице, чтобы развернуть смысл и перейти к конкретным товарам</div>
                     <div style={{display: 'flex', flexDirection: 'column', gap: 7}}>
-                      {block.rows.slice(0, 5).map((row, idx) => (
+                      {block.items.slice(0, 4).map((row, idx) => (
                         <div key={idx} style={{fontSize: '0.9em', color: '#cbd5e1', lineHeight: 1.45}}>
                           <div style={{fontWeight: 600}}>{row.name}</div>
-                          <div style={{color: '#94a3b8'}}>SKU: {row.sku_count?.toLocaleString('ru-RU') || '—'} · покрытие: {row.coverage_days == null ? '—' : `${row.coverage_days} дн.`}</div>
+                          <div style={{color: '#94a3b8'}}>SKU: {row.sku_count?.toLocaleString('ru-RU') || '—'} · продажи 30д: {Math.round(row.sales_qty_30 || 0).toLocaleString('ru-RU')}</div>
                         </div>
                       ))}
                     </div>
@@ -1078,7 +1175,7 @@ function CatalogAnalyticsView({
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap'}}>
               <div>
                 <div style={{fontSize: '1.04em', fontWeight: 800, color: '#f8fafc'}}>Сегменты: группы и подгруппы</div>
-                <div style={{fontSize: '0.9em', color: '#94a3b8', marginTop: 4}}>Сравнение вклада, здоровья, покрытия и проблем по ассортиментным блокам</div>
+                <div style={{fontSize: '0.9em', color: '#94a3b8', marginTop: 4}}>Теперь это не просто таблица: можно развернуть сегмент, прочитать прикладной вывод и перейти к конкретным товарам внутри</div>
               </div>
               <div style={{fontSize: '0.88em', color: '#64748b'}}>Показаны топ-{topSegments.length} по выбранному скоупу</div>
             </div>
@@ -1092,19 +1189,77 @@ function CatalogAnalyticsView({
                   </tr>
                 </thead>
                 <tbody>
-                  {topSegments.map(seg => (
-                    <tr key={seg.path} style={{borderBottom: '1px solid #0b1220'}}>
-                      <td style={{padding: '12px', color: '#f8fafc', fontWeight: 600}}><span className="analytics-mobile-label" style={{display: 'none'}}>Сегмент</span>{seg.name}</td>
-                      <td style={{padding: '12px', color: '#cbd5e1'}}><span className="analytics-mobile-label" style={{display: 'none'}}>SKU</span>{seg.sku_count.toLocaleString('ru-RU')}</td>
-                      <td style={{padding: '12px', color: '#22c55e'}}><span className="analytics-mobile-label" style={{display: 'none'}}>30д</span>{Math.round(seg.sales_qty_30).toLocaleString('ru-RU')}</td>
-                      <td style={{padding: '12px', color: '#60a5fa'}}><span className="analytics-mobile-label" style={{display: 'none'}}>365д</span>{Math.round(seg.sales_qty_365).toLocaleString('ru-RU')}</td>
-                      <td style={{padding: '12px', color: '#cbd5e1'}}><span className="analytics-mobile-label" style={{display: 'none'}}>Покрытие</span>{seg.coverage_days == null ? '—' : `${seg.coverage_days} дн.`}</td>
-                      <td style={{padding: '12px', color: '#f59e0b'}}><span className="analytics-mobile-label" style={{display: 'none'}}>Без продаж</span>{seg.no_sales_sku.toLocaleString('ru-RU')}</td>
-                      <td style={{padding: '12px', color: '#ef4444'}}><span className="analytics-mobile-label" style={{display: 'none'}}>Dead stock</span>{seg.dead_stock_sku.toLocaleString('ru-RU')}</td>
-                      <td style={{padding: '12px'}}><span className="analytics-mobile-label" style={{display: 'none'}}>Статус</span><span style={{padding: '4px 8px', borderRadius: 999, background: seg.healthy_status === 'healthy' ? '#052e16' : seg.healthy_status === 'deficit' ? '#3f1212' : '#3b2f0b', color: seg.healthy_status === 'healthy' ? '#22c55e' : seg.healthy_status === 'deficit' ? '#f87171' : '#fbbf24', fontSize: '0.84em', fontWeight: 700}}>{seg.healthy_status}</span></td>
-                      <td style={{padding: '12px'}}><span className="analytics-mobile-label" style={{display: 'none'}}>Действие</span><button onClick={() => onOpenCatalog(seg.path)} style={{padding: '8px 10px', borderRadius: 8, border: '1px solid #334155', background: '#111827', color: '#e2e8f0', cursor: 'pointer'}}>Открыть</button></td>
-                    </tr>
-                  ))}
+                  {topSegments.map(seg => {
+                    const isOpen = expandedSegments.has(seg.path);
+                    const noSalesShare = seg.sku_count > 0 ? Math.round((seg.no_sales_sku / seg.sku_count) * 100) : 0;
+                    return (
+                      <>
+                        <tr key={seg.path} style={{borderBottom: isOpen ? 'none' : '1px solid #0b1220'}}>
+                          <td style={{padding: '12px', color: '#f8fafc', fontWeight: 600}}>
+                            <span className="analytics-mobile-label" style={{display: 'none'}}>Сегмент</span>
+                            <button
+                              onClick={() => toggleSegment(seg.path)}
+                              style={{background: 'none', border: 'none', color: '#f8fafc', padding: 0, cursor: 'pointer', font: 'inherit', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8}}
+                            >
+                              <span style={{color: '#60a5fa', fontSize: '0.95em'}}>{isOpen ? '▾' : '▸'}</span>
+                              <span>{seg.name}</span>
+                            </button>
+                          </td>
+                          <td style={{padding: '12px', color: '#cbd5e1'}}><span className="analytics-mobile-label" style={{display: 'none'}}>SKU</span>{seg.sku_count.toLocaleString('ru-RU')}</td>
+                          <td style={{padding: '12px', color: '#22c55e'}}><span className="analytics-mobile-label" style={{display: 'none'}}>30д</span>{Math.round(seg.sales_qty_30).toLocaleString('ru-RU')}</td>
+                          <td style={{padding: '12px', color: '#60a5fa'}}><span className="analytics-mobile-label" style={{display: 'none'}}>365д</span>{Math.round(seg.sales_qty_365).toLocaleString('ru-RU')}</td>
+                          <td style={{padding: '12px', color: '#cbd5e1'}}><span className="analytics-mobile-label" style={{display: 'none'}}>Покрытие</span>{seg.coverage_days == null ? '—' : `${seg.coverage_days} дн.`}</td>
+                          <td style={{padding: '12px', color: '#f59e0b'}}><span className="analytics-mobile-label" style={{display: 'none'}}>Без продаж</span>{seg.no_sales_sku.toLocaleString('ru-RU')}</td>
+                          <td style={{padding: '12px', color: '#ef4444'}}><span className="analytics-mobile-label" style={{display: 'none'}}>Dead stock</span>{seg.dead_stock_sku.toLocaleString('ru-RU')}</td>
+                          <td style={{padding: '12px'}}><span className="analytics-mobile-label" style={{display: 'none'}}>Статус</span><span style={{padding: '4px 8px', borderRadius: 999, background: seg.healthy_status === 'healthy' ? '#052e16' : seg.healthy_status === 'deficit' ? '#3f1212' : '#3b2f0b', color: seg.healthy_status === 'healthy' ? '#22c55e' : seg.healthy_status === 'deficit' ? '#f87171' : '#fbbf24', fontSize: '0.84em', fontWeight: 700}}>{seg.healthy_status}</span></td>
+                          <td style={{padding: '12px'}}>
+                            <span className="analytics-mobile-label" style={{display: 'none'}}>Действие</span>
+                            <button onClick={() => onOpenCatalog(seg.path)} style={{padding: '8px 10px', borderRadius: 8, border: '1px solid #334155', background: '#111827', color: '#e2e8f0', cursor: 'pointer'}}>{segmentActionLabel(seg)}</button>
+                          </td>
+                        </tr>
+                        {isOpen && (
+                          <tr key={`${seg.path}-details`} style={{borderBottom: '1px solid #0b1220'}}>
+                            <td colSpan={9} style={{padding: '0 12px 14px'}}>
+                              <div style={{background: '#111827', border: '1px solid #1f2937', borderRadius: 12, padding: '14px 16px', display: 'grid', gridTemplateColumns: '1.15fr .85fr', gap: 14}}>
+                                <div>
+                                  <div style={{fontSize: '0.92em', color: '#64748b', marginBottom: 8}}>Что это значит practically</div>
+                                  <div style={{color: '#e2e8f0', lineHeight: 1.65, marginBottom: 12}}>{segmentPracticalTakeaway(seg)}</div>
+                                  <div style={{display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10}}>
+                                    <div style={{background: '#0f172a', borderRadius: 10, padding: '10px 12px'}}>
+                                      <div style={{fontSize: '0.8em', color: '#64748b', marginBottom: 4}}>Активных SKU</div>
+                                      <div style={{fontWeight: 800, color: '#22c55e'}}>{seg.active_sku.toLocaleString('ru-RU')}</div>
+                                    </div>
+                                    <div style={{background: '#0f172a', borderRadius: 10, padding: '10px 12px'}}>
+                                      <div style={{fontSize: '0.8em', color: '#64748b', marginBottom: 4}}>SKU без продаж</div>
+                                      <div style={{fontWeight: 800, color: '#f59e0b'}}>{seg.no_sales_sku.toLocaleString('ru-RU')} · {noSalesShare}%</div>
+                                    </div>
+                                    <div style={{background: '#0f172a', borderRadius: 10, padding: '10px 12px'}}>
+                                      <div style={{fontSize: '0.8em', color: '#64748b', marginBottom: 4}}>Деньги в остатке</div>
+                                      <div style={{fontWeight: 800, color: '#60a5fa'}}>{Math.round(seg.stock_value_purchase || 0).toLocaleString('ru-RU')} ₽</div>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+                                  <div style={{background: '#0f172a', borderRadius: 10, padding: '12px 14px'}}>
+                                    <div style={{fontSize: '0.86em', color: '#64748b', marginBottom: 6}}>Что делать дальше</div>
+                                    <div style={{color: '#cbd5e1', lineHeight: 1.55}}>
+                                      1) открыть сегмент в каталоге;<br/>
+                                      2) посмотреть конкретные товары внутри;<br/>
+                                      3) отдельно разобрать лидеры, слабые SKU и зависшие позиции.
+                                    </div>
+                                  </div>
+                                  <div style={{display: 'flex', gap: 8, flexWrap: 'wrap'}}>
+                                    <button onClick={() => onOpenCatalog(seg.path)} style={{padding: '9px 12px', borderRadius: 8, border: '1px solid #334155', background: '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 700}}>Открыть товары этого сегмента</button>
+                                    <button onClick={() => toggleSegment(seg.path)} style={{padding: '9px 12px', borderRadius: 8, border: '1px solid #334155', background: '#111827', color: '#e2e8f0', cursor: 'pointer'}}>Свернуть</button>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1269,6 +1424,456 @@ function SupplierSettings({supplier, onSave}: {supplier: Supplier; onSave: (s: P
       <div style={{fontSize: '0.78em', color: '#64748b', alignSelf: 'center'}}>
         ⚠ После изменения пересчитайте рекомендации
       </div>
+    </div>
+  );
+}
+
+// ── Analytics page ────────────────────────────────────────────────────────────
+
+const MONTH_NAMES_SHORT = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
+
+function AnalyticsDonut({summary, drillKey, onDrill}: {summary: AnalyticsSummary; drillKey: string|null; onDrill: (k: string|null) => void}) {
+  const [hov, setHov] = useState<string|null>(null);
+  const segs = [
+    {key:'normal',         label:'Норм',             color:'#22c55e', ...summary.segments.normal},
+    {key:'overstock_only', label:'Только перестой',  color:'#f97316', ...summary.segments.overstock_only},
+    {key:'nlq_only',       label:'Только неликвид',  color:'#eab308', ...summary.segments.nlq_only},
+    {key:'both',           label:'Перестой+неликвид',color:'#ef4444', ...summary.segments.both},
+  ];
+  const total = segs.reduce((s, x) => s + x.count, 0);
+  if (total === 0) return <div style={{color:'#64748b',padding:32}}>Нет данных</div>;
+
+  const R=88, r=50, cx=100, cy=100;
+  let cumA = -Math.PI / 2;
+  const arcs = segs.map(seg => {
+    const frac = seg.count / total;
+    const sweep = frac * 2 * Math.PI;
+    const sa = cumA, ea = cumA + sweep;
+    cumA += sweep;
+    const large = sweep > Math.PI ? 1 : 0;
+    const d = [
+      `M ${cx + R*Math.cos(sa)} ${cy + R*Math.sin(sa)}`,
+      `A ${R} ${R} 0 ${large} 1 ${cx + R*Math.cos(ea)} ${cy + R*Math.sin(ea)}`,
+      `L ${cx + r*Math.cos(ea)} ${cy + r*Math.sin(ea)}`,
+      `A ${r} ${r} 0 ${large} 0 ${cx + r*Math.cos(sa)} ${cy + r*Math.sin(sa)}`,
+      'Z'
+    ].join(' ');
+    return {...seg, d, frac};
+  });
+
+  return (
+    <div style={{display:'flex', gap:20, alignItems:'center'}}>
+      <svg width={200} height={200} style={{flexShrink:0}}>
+        {arcs.map(a => (
+          <path key={a.key} d={a.d} fill={a.color}
+            opacity={hov && hov !== a.key ? 0.35 : drillKey === a.key ? 1 : hov === a.key ? 1 : 0.85}
+            stroke={drillKey === a.key ? '#fff' : 'none'} strokeWidth={2}
+            style={{cursor:'pointer', transition:'opacity 0.12s'}}
+            onClick={() => onDrill(drillKey === a.key ? null : a.key)}
+            onMouseEnter={() => setHov(a.key)} onMouseLeave={() => setHov(null)}
+          />
+        ))}
+        <text x={cx} y={cy-6} textAnchor="middle" fill="#f1f5f9" fontSize={26} fontWeight={700}>{total.toLocaleString('ru-RU')}</text>
+        <text x={cx} y={cx+10} textAnchor="middle" fill="#64748b" fontSize={11}>позиций</text>
+      </svg>
+      <div style={{display:'flex',flexDirection:'column',gap:6}}>
+        {arcs.map(a => (
+          <div key={a.key} style={{display:'flex',alignItems:'flex-start',gap:8,cursor:'pointer',
+              opacity: hov && hov !== a.key ? 0.45 : 1}}
+            onClick={() => onDrill(drillKey === a.key ? null : a.key)}
+            onMouseEnter={() => setHov(a.key)} onMouseLeave={() => setHov(null)}>
+            <div style={{width:12,height:12,borderRadius:3,background:a.color,flexShrink:0,marginTop:3,
+              boxShadow: drillKey === a.key ? `0 0 0 2px #fff` : 'none'}} />
+            <div>
+              <div style={{color:'#e2e8f0',fontSize:'0.82em',fontWeight: drillKey===a.key ? 700 : 400}}>{a.label}</div>
+              <div style={{color:'#64748b',fontSize:'0.73em'}}>
+                {a.count.toLocaleString('ru-RU')} шт · {Math.round(a.frac*100)}% · {(a.value/1000000).toFixed(1)} М₽
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SalesYearChart({data}: {data: AnalyticsSaleRow[]}) {
+  const [metric, setMetric] = useState<'qty'|'revenue'>('qty');
+  const years = [2024, 2025, 2026];
+  const yColors = ['#3b82f6','#22c55e','#f59e0b'];
+  const byYM = new Map<string, number>();
+  for (const r of data) byYM.set(`${r.year}-${r.month}`, metric === 'qty' ? r.net_qty : r.revenue);
+  const allVals = years.flatMap(y => Array.from({length:12},(_,i) => byYM.get(`${y}-${i+1}`) || 0));
+  const maxV = Math.max(...allVals, 1);
+  const W=640, H=200, PL=48, PR=8, PT=8, PB=24;
+  const cW=W-PL-PR, cH=H-PT-PB;
+  const mW=cW/12, bW=Math.max(2, (mW-4)/3);
+  return (
+    <div>
+      <div style={{display:'flex',gap:8,marginBottom:8,alignItems:'center',flexWrap:'wrap'}}>
+        {(['qty','revenue'] as const).map(m => (
+          <button key={m} className="ghost-btn"
+            style={{padding:'2px 8px',fontSize:'0.78em',background: metric===m ? '#1e3a5f' : undefined}}
+            onClick={() => setMetric(m)}>{m==='qty' ? 'Кол-во' : 'Выручка'}</button>
+        ))}
+        {years.map((y,i) => (
+          <span key={y} style={{display:'flex',alignItems:'center',gap:4,fontSize:'0.78em',color:'#94a3b8'}}>
+            <span style={{display:'inline-block',width:10,height:10,background:yColors[i],borderRadius:2}}/>
+            {y}
+          </span>
+        ))}
+      </div>
+      <svg width={W} height={H} style={{overflow:'visible'}}>
+        {[0,0.25,0.5,0.75,1].map(t => {
+          const y = PT + cH*(1-t);
+          const lbl = metric==='revenue'
+            ? `${(maxV*t/1000000).toFixed(1)}М`
+            : Math.round(maxV*t).toLocaleString('ru-RU');
+          return <g key={t}>
+            <line x1={PL} x2={PL+cW} y1={y} y2={y} stroke="#1e293b" strokeWidth={1}/>
+            <text x={PL-4} y={y+4} textAnchor="end" fill="#475569" fontSize={10}>{lbl}</text>
+          </g>;
+        })}
+        {Array.from({length:12},(_,mi) => years.map((yr,yi) => {
+          const v = byYM.get(`${yr}-${mi+1}`) || 0;
+          const bH = Math.max(1, (v/maxV)*cH);
+          const x = PL + mi*mW + yi*bW + 2;
+          const y = PT + cH - bH;
+          return <rect key={`${yr}-${mi}`} x={x} y={y} width={Math.max(1,bW-1)} height={bH}
+            fill={yColors[yi]} opacity={0.8} rx={1}/>;
+        }))}
+        {Array.from({length:12},(_,mi) => (
+          <text key={mi} x={PL+mi*mW+mW/2} y={H-6} textAnchor="middle" fill="#475569" fontSize={10}>
+            {MONTH_NAMES_SHORT[mi]}
+          </text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+type SupplierSortKey = 'nlq'|'overstock'|'score'|'value';
+
+function SupplierTable({suppliers, sortKey, onSortChange, onDrillSupplier}:{
+  suppliers: AnalyticsSupplier[];
+  sortKey: SupplierSortKey;
+  onSortChange: (k: SupplierSortKey) => void;
+  onDrillSupplier: (name: string) => void;
+}) {
+  const sorted = [...suppliers].sort((a,b) => {
+    if (sortKey === 'nlq') return b.nlq_count - a.nlq_count;
+    if (sortKey === 'overstock') return b.overstock_count - a.overstock_count;
+    if (sortKey === 'value') return b.total_value - a.total_value;
+    return b.score - a.score;
+  });
+  const SortBtn = ({k, label}: {k: SupplierSortKey; label: string}) => (
+    <button className="ghost-btn" style={{padding:'1px 6px',fontSize:'0.75em',
+      background: sortKey===k ? '#1e3a5f' : undefined}} onClick={() => onSortChange(k)}>{label}</button>
+  );
+  const scoreColor = (s: number) => s >= 70 ? '#22c55e' : s >= 50 ? '#f59e0b' : '#ef4444';
+  return (
+    <div>
+      <div style={{display:'flex',gap:6,marginBottom:10,alignItems:'center',flexWrap:'wrap'}}>
+        <span style={{color:'#94a3b8',fontSize:'0.8em'}}>Сортировка:</span>
+        <SortBtn k="nlq" label="По неликвиду"/>
+        <SortBtn k="overstock" label="По перестою"/>
+        <SortBtn k="score" label="По рейтингу"/>
+        <SortBtn k="value" label="По сумме"/>
+      </div>
+      <div style={{overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.82em'}}>
+          <thead>
+            <tr style={{background:'#0a1628'}}>
+              <th style={{padding:'6px 10px',textAlign:'left',color:'#64748b',fontWeight:500}}>Поставщик</th>
+              <th style={{padding:'6px 8px',textAlign:'right',color:'#64748b',fontWeight:500}}>С ост.</th>
+              <th style={{padding:'6px 8px',textAlign:'right',color:'#eab308',fontWeight:500}}>Неликвид</th>
+              <th style={{padding:'6px 8px',textAlign:'right',color:'#eab308',fontWeight:500,fontSize:'0.9em'}}>%, М₽</th>
+              <th style={{padding:'6px 8px',textAlign:'right',color:'#f97316',fontWeight:500}}>Перестой</th>
+              <th style={{padding:'6px 8px',textAlign:'right',color:'#f97316',fontWeight:500,fontSize:'0.9em'}}>%, М₽</th>
+              <th style={{padding:'6px 8px',textAlign:'right',color:'#94a3b8',fontWeight:500}}>Рейтинг</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.slice(0, 50).map((s, i) => (
+              <tr key={s.supplier_name} style={{
+                borderBottom:'1px solid #1e293b',
+                background: i%2===0 ? 'rgba(255,255,255,0.015)' : undefined,
+                cursor:'pointer',
+              }}
+                onClick={() => onDrillSupplier(s.supplier_name)}
+                onMouseEnter={e => (e.currentTarget.style.background='rgba(255,255,255,0.04)')}
+                onMouseLeave={e => (e.currentTarget.style.background = i%2===0 ? 'rgba(255,255,255,0.015)' : '')}
+              >
+                <td style={{padding:'6px 10px',color:'#cbd5e1',maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                  {s.supplier_name}
+                </td>
+                <td style={{padding:'6px 8px',textAlign:'right',color:'#475569'}}>{s.items_with_stock.toLocaleString('ru-RU')}</td>
+                <td style={{padding:'6px 8px',textAlign:'right',color: s.nlq_count > 0 ? '#fbbf24' : '#334155',fontWeight: s.nlq_count>0?600:400}}>
+                  {s.nlq_count.toLocaleString('ru-RU')}
+                </td>
+                <td style={{padding:'6px 8px',textAlign:'right',color:'#64748b',fontSize:'0.9em'}}>
+                  {s.nlq_pct}% · {(s.nlq_value/1000000).toFixed(2)}М
+                </td>
+                <td style={{padding:'6px 8px',textAlign:'right',color: s.overstock_count > 0 ? '#fb923c' : '#334155',fontWeight: s.overstock_count>0?600:400}}>
+                  {s.overstock_count.toLocaleString('ru-RU')}
+                </td>
+                <td style={{padding:'6px 8px',textAlign:'right',color:'#64748b',fontSize:'0.9em'}}>
+                  {s.os_pct}% · {(s.overstock_value/1000000).toFixed(2)}М
+                </td>
+                <td style={{padding:'6px 8px',textAlign:'right'}}>
+                  <span style={{
+                    display:'inline-block',padding:'1px 8px',borderRadius:4,
+                    background: scoreColor(s.score), color:'#fff',fontWeight:700,fontSize:'0.9em',
+                  }}>{s.score}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {sorted.length > 50 && <div style={{color:'#64748b',fontSize:'0.78em',marginTop:6}}>…ещё {sorted.length-50} поставщиков</div>}
+    </div>
+  );
+}
+
+function AnalyticsDrillList({drillKey, items, total, loading, onClose, onOpenItem}: {
+  drillKey: string; items: AnalyticsDrillItem[]; total: number; loading: boolean;
+  onClose: () => void;
+  onOpenItem?: (item: AnalyticsDrillItem) => void;
+}) {
+  const segLabel: Record<string, string> = {
+    overstock_only:'Только перестой', nlq_only:'Только неликвид',
+    both:'Перестой и неликвид', normal:'Норм', pre_season:'Предсезон',
+    all_nlq: 'Неликвид поставщика', all_overstock: 'Перестой поставщика',
+  };
+  const label = drillKey.startsWith('supplier:')
+    ? `Поставщик: ${drillKey.slice(9)}`
+    : (segLabel[drillKey] || drillKey);
+
+  return (
+    <div style={{marginTop:16, background:'#0f1e33', borderRadius:8, border:'1px solid #1e3a5f', overflow:'hidden'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 14px',background:'#0a1628',borderBottom:'1px solid #1e293b'}}>
+        <span style={{color:'#e2e8f0',fontWeight:600}}>{label} — {total.toLocaleString('ru-RU')} позиций</span>
+        <button className="ghost-btn" style={{padding:'2px 8px',fontSize:'0.8em'}} onClick={onClose}>✕ Закрыть</button>
+      </div>
+      {loading && <div style={{padding:24,color:'#64748b',textAlign:'center'}}>Загрузка…</div>}
+      {!loading && (
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.8em'}}>
+            <thead>
+              <tr style={{background:'#0a1628'}}>
+                <th style={{padding:'5px 10px',textAlign:'left',color:'#64748b',fontWeight:500}}>Название</th>
+                <th style={{padding:'5px 8px',textAlign:'right',color:'#64748b',fontWeight:500}}>Ост.</th>
+                <th style={{padding:'5px 8px',textAlign:'right',color:'#64748b',fontWeight:500}}>Покр. дн.</th>
+                <th style={{padding:'5px 8px',textAlign:'right',color:'#64748b',fontWeight:500}}>Посл. продажа</th>
+                <th style={{padding:'5px 8px',textAlign:'right',color:'#64748b',fontWeight:500}}>Сумма ₽</th>
+                <th style={{padding:'5px 8px',textAlign:'left',color:'#64748b',fontWeight:500}}>Группа</th>
+                <th style={{padding:'5px 8px',textAlign:'left',color:'#64748b',fontWeight:500}}>АВС/XYZ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, i) => {
+                const val = item.qty * (item.purchase_price || 0);
+                const covColor = item.coverage_days !== null
+                  ? (item.coverage_days > 90 ? '#f97316' : item.coverage_days > 56 ? '#fbbf24' : '#22c55e')
+                  : '#64748b';
+                const daysColor = item.days_since_last_sale !== null
+                  ? (item.days_since_last_sale > 365 ? '#ef4444' : item.days_since_last_sale > 120 ? '#fbbf24' : '#64748b')
+                  : '#ef4444';
+                return (
+                  <tr key={item.id} style={{borderBottom:'1px solid #1e293b',background:i%2===0?'rgba(255,255,255,0.01)':undefined,cursor:onOpenItem?'pointer':undefined}}
+                    onClick={() => onOpenItem?.(item)}>
+                    <td style={{padding:'5px 10px',color:'#cbd5e1',maxWidth:260,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                      {item.item_name}
+                    </td>
+                    <td style={{padding:'5px 8px',textAlign:'right',color:'#94a3b8'}}>{item.qty.toLocaleString('ru-RU')}</td>
+                    <td style={{padding:'5px 8px',textAlign:'right',color:covColor,fontWeight:600}}>
+                      {item.coverage_days !== null ? item.coverage_days.toLocaleString('ru-RU') : '∞'}
+                    </td>
+                    <td style={{padding:'5px 8px',textAlign:'right',color:daysColor}}>
+                      {item.days_since_last_sale !== null ? `${item.days_since_last_sale} дн.` : 'никогда'}
+                    </td>
+                    <td style={{padding:'5px 8px',textAlign:'right',color:'#64748b'}}>
+                      {val > 0 ? Math.round(val).toLocaleString('ru-RU') : '—'}
+                    </td>
+                    <td style={{padding:'5px 8px',color:'#475569',maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                      {item.group_l0 || item.group_full_path || '—'}
+                    </td>
+                    <td style={{padding:'5px 8px'}}>
+                      {(item.abc_class || item.xyz_class) ? <ClassBadge abc={item.abc_class||''} xyz={item.xyz_class||''}/> : <span style={{color:'#334155'}}>—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+              {!items.length && (
+                <tr><td colSpan={7} style={{padding:'24px 10px',textAlign:'center',color:'#475569'}}>Позиции не найдены</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {total > items.length && (
+        <div style={{padding:'6px 12px',color:'#64748b',fontSize:'0.78em',background:'#0a1628'}}>
+          Показано {items.length} из {total.toLocaleString('ru-RU')} · первые по сумме замороженных средств
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalyticsPage({onOpenC2Item}: {onOpenC2Item?: (code: string) => void}) {
+  const [path, setPath] = useState('');
+  const [topGroups, setTopGroups] = useState<{name: string; item_count: number}[]>([]);
+  const [summary, setSummary] = useState<AnalyticsSummary|null>(null);
+  const [salesData, setSalesData] = useState<AnalyticsSaleRow[]>([]);
+  const [suppliers, setSuppliers] = useState<AnalyticsSupplier[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [drillKey, setDrillKey] = useState<string|null>(null);
+  const [drillItems, setDrillItems] = useState<AnalyticsDrillItem[]>([]);
+  const [drillTotal, setDrillTotal] = useState(0);
+  const [drillLoading, setDrillLoading] = useState(false);
+  const [supplierSort, setSupplierSort] = useState<SupplierSortKey>('nlq');
+
+  useEffect(() => {
+    fetch(apiUrl('/api/catalog2/children?path='))
+      .then(r => r.json())
+      .then(d => setTopGroups(d.children || []))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
+    setDrillKey(null);
+    setDrillItems([]);
+    const p = path ? `?path=${encodeURIComponent(path)}` : '';
+    Promise.all([
+      fetch(apiUrl(`/api/analytics/summary${p}`)).then(r=>r.json()),
+      fetch(apiUrl(`/api/analytics/sales-by-year${p}`)).then(r=>r.json()),
+      fetch(apiUrl(`/api/analytics/suppliers${p}`)).then(r=>r.json()),
+    ]).then(([sum, sales, sups]) => {
+      setSummary(sum);
+      setSalesData(Array.isArray(sales) ? sales : []);
+      setSuppliers(Array.isArray(sups) ? sups : []);
+    }).catch(console.error)
+    .finally(() => setLoading(false));
+  }, [path]);
+
+  async function drill(key: string) {
+    if (drillKey === key) { setDrillKey(null); setDrillItems([]); return; }
+    setDrillKey(key);
+    setDrillLoading(true);
+    try {
+      let segment = key;
+      let sup = '';
+      if (key.startsWith('supplier:')) {
+        sup = key.slice(9);
+        segment = 'all_nlq';
+      }
+      const p = new URLSearchParams({segment, limit:'100'});
+      if (path) p.set('path', path);
+      if (sup) p.set('supplier', sup);
+      const d = await fetch(apiUrl(`/api/analytics/items?${p}`)).then(r=>r.json());
+      setDrillItems(d.items || []);
+      setDrillTotal(d.total || 0);
+    } catch(e) { console.error(e); }
+    finally { setDrillLoading(false); }
+  }
+
+  const totalStock = summary ? (summary.total_stock_value/1000000).toFixed(1) : '—';
+  const kpiCards = summary ? [
+    {label:'Всего с остатком', val: summary.total_with_stock.toLocaleString('ru-RU'), sub:`${totalStock} М₽`, color:'#64748b'},
+    {label:'Норм', val: summary.segments.normal.count.toLocaleString('ru-RU'), sub:`${(summary.segments.normal.value/1000000).toFixed(1)} М₽`, color:'#22c55e'},
+    {label:'Перестой', val: (summary.segments.overstock_only.count+summary.segments.both.count).toLocaleString('ru-RU'), sub:`${((summary.segments.overstock_only.value+summary.segments.both.value)/1000000).toFixed(1)} М₽`, color:'#f97316', key:'overstock_only'},
+    {label:'Неликвид', val: (summary.segments.nlq_only.count+summary.segments.both.count).toLocaleString('ru-RU'), sub:`${((summary.segments.nlq_only.value+summary.segments.both.value)/1000000).toFixed(1)} М₽`, color:'#eab308', key:'nlq_only'},
+    {label:'Предсезон ↑', val: summary.pre_season_count.toLocaleString('ru-RU'), sub:'к заказу', color:'#a78bfa', key:'pre_season'},
+  ] : [];
+
+  return (
+    <div style={{padding:'16px 0'}}>
+      {/* group filter strip */}
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:16,paddingLeft:4}}>
+        <button className={`ghost-btn${path===''?' active-filter':''}`}
+          style={{padding:'3px 10px',fontSize:'0.8em',background:path===''?'#1e3a5f':undefined,fontWeight:path===''?700:400}}
+          onClick={() => setPath('')}>Все</button>
+        {topGroups.map(g => (
+          <button key={g.name} className="ghost-btn"
+            style={{padding:'3px 10px',fontSize:'0.8em',background:path===g.name?'#1e3a5f':undefined,fontWeight:path===g.name?700:400}}
+            onClick={() => setPath(path === g.name ? '' : g.name)}>{g.name}</button>
+        ))}
+      </div>
+
+      {loading && <div style={{color:'#64748b',padding:'16px 4px',fontSize:'0.85em'}}>Загрузка…</div>}
+
+      {/* KPI cards */}
+      {summary && (
+        <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:16}}>
+          {kpiCards.map(c => (
+            <div key={c.label}
+              style={{background:'#0a1628',borderRadius:8,padding:'10px 16px',minWidth:130,flex:1,
+                border:`1px solid ${'key' in c && c.key === drillKey ? c.color : '#1e293b'}`,
+                cursor:'key' in c && c.key ? 'pointer' : 'default',
+                transition:'border-color 0.15s',
+              }}
+              onClick={() => 'key' in c && c.key ? drill(c.key!) : undefined}>
+              <div style={{color:'#64748b',fontSize:'0.72em',marginBottom:3}}>{c.label}</div>
+              <div style={{color:c.color,fontSize:'1.5em',fontWeight:700,lineHeight:1}}>{c.val}</div>
+              <div style={{color:'#475569',fontSize:'0.72em',marginTop:2}}>{c.sub}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* charts row */}
+      {summary && (
+        <div style={{display:'flex',gap:16,flexWrap:'wrap',marginBottom:16}}>
+          {/* donut */}
+          <div style={{background:'#0a1628',borderRadius:8,padding:16,border:'1px solid #1e293b',flexShrink:0}}>
+            <div style={{color:'#94a3b8',fontSize:'0.75em',marginBottom:10}}>Структура остатков</div>
+            <AnalyticsDonut summary={summary} drillKey={drillKey} onDrill={drill}/>
+          </div>
+          {/* sales by year */}
+          <div style={{background:'#0a1628',borderRadius:8,padding:16,border:'1px solid #1e293b',flex:1,minWidth:320,overflow:'hidden'}}>
+            <div style={{color:'#94a3b8',fontSize:'0.75em',marginBottom:4}}>Продажи по годам</div>
+            {salesData.length > 0
+              ? <SalesYearChart data={salesData}/>
+              : <div style={{color:'#475569',padding:32,textAlign:'center'}}>Нет данных о продажах</div>
+            }
+          </div>
+        </div>
+      )}
+
+      {/* drill-down panel */}
+      {drillKey && !drillKey.startsWith('supplier:') && (
+        <AnalyticsDrillList
+          drillKey={drillKey} items={drillItems} total={drillTotal} loading={drillLoading}
+          onClose={() => { setDrillKey(null); setDrillItems([]); }}
+        />
+      )}
+
+      {/* supplier analytics */}
+      <div style={{background:'#0a1628',borderRadius:8,padding:16,border:'1px solid #1e293b',marginTop:16}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,flexWrap:'wrap',gap:8}}>
+          <div>
+            <div style={{color:'#94a3b8',fontSize:'0.75em'}}>Аналитика по поставщикам</div>
+            <div style={{color:'#e2e8f0',fontWeight:600,fontSize:'1em'}}>
+              {suppliers.length} поставщиков · рейтинг = меньше неликвида / перестоя + больше А-товаров
+            </div>
+          </div>
+        </div>
+        {suppliers.length > 0
+          ? <SupplierTable suppliers={suppliers} sortKey={supplierSort} onSortChange={setSupplierSort}
+              onDrillSupplier={name => drill(`supplier:${name}`)}/>
+          : <div style={{color:'#475569',padding:24,textAlign:'center'}}>Нет данных (требуется связь товар↔поставщик через штрихкод)</div>
+        }
+      </div>
+
+      {/* supplier drill-down */}
+      {drillKey?.startsWith('supplier:') && (
+        <AnalyticsDrillList
+          drillKey={drillKey} items={drillItems} total={drillTotal} loading={drillLoading}
+          onClose={() => { setDrillKey(null); setDrillItems([]); }}
+        />
+      )}
     </div>
   );
 }
@@ -1809,6 +2414,7 @@ export function App() {
           <button className={tab === 'catalog' ? 'tab active' : 'tab'} onClick={() => { setTab('catalog'); navigateToTab('catalog'); }}>Товары</button>
           <button className={tab === 'catalog2' ? 'tab active' : 'tab'} onClick={() => { setTab('catalog2'); navigateToTab('catalog2'); }}>Каталог</button>
           <button className={tab === 'catalogAnalytics' ? 'tab active' : 'tab'} onClick={() => { setTab('catalogAnalytics'); navigateToTab('catalogAnalytics'); }}>Аналитика</button>
+          <button className={tab === 'analytics' ? 'tab active' : 'tab'} onClick={() => { setTab('analytics'); navigateToTab('analytics'); }}>Аналитика склада</button>
           <button className={tab === 'nonLiquid' ? 'tab active' : 'tab'} onClick={() => { setTab('nonLiquid'); navigateToTab('nonLiquid'); }}>Неликвиды</button>
           <button className={tab === 'decisions' ? 'tab active' : 'tab'} onClick={() => { setTab('decisions'); navigateToTab('decisions'); }}>Решения менеджеров</button>
         </div>
@@ -2628,6 +3234,20 @@ export function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* ── ANALYTICS TAB ─────────────────────────────────────────────── */}
+        {tab === 'analytics' && (
+          <section className="card" style={{padding:'12px 16px'}}>
+            <div className="section-head" style={{marginBottom:8}}>
+              <div>
+                <span className="eyebrow">Склад</span>
+                <h2>Аналитика склада</h2>
+                <div className="meta">Структура остатков · неликвид · перестой · поставщики</div>
+              </div>
+            </div>
+            <AnalyticsPage/>
+          </section>
         )}
 
       </main>

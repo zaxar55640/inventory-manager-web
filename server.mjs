@@ -951,6 +951,274 @@ app.post('/api/catalog2/sales', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── Analytics API ─────────────────────────────────────────────────────────────
+
+const OVERSTOCK_DAYS = 56;
+const NLQ_DAYS = 120;
+
+app.get('/api/analytics/summary', (req, res) => {
+  try {
+    const pathStr = String(req.query.path || '');
+    const pathParts = pathStr ? pathStr.split(' / ') : [];
+    const { where: pw, params: pp } = catalogPathWhere(pathParts);
+    const cpFilter = pw ? `AND ${pw}` : '';
+
+    const rows = db.prepare(`
+      SELECT cp.item_code,
+             CAST(cp.qty AS REAL) AS qty,
+             CAST(cp.purchase_price AS REAL) AS purchase_price,
+             cf.forecast_day_matrix,
+             cf.to_order AS forecast_to_order,
+             cf.peak_months,
+             CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) AS days_since_last_sale
+      FROM catalog_products cp
+      LEFT JOIN catalog_forecast cf ON cf.item_code = cp.item_code
+      LEFT JOIN (
+        SELECT item_code, MAX(sale_date) AS last_sale_date
+        FROM catalog_sales GROUP BY item_code
+      ) ls ON ls.item_code = cp.item_code
+      WHERE cp.qty > 0 ${cpFilter}
+    `).all(...pp);
+
+    const now = new Date();
+    const curM = now.getMonth() + 1;
+    let normal = 0, overstockOnly = 0, nlqOnly = 0, both = 0;
+    let normalVal = 0, overstockVal = 0, nlqVal = 0, bothVal = 0;
+    let preSeasonCount = 0;
+
+    for (const row of rows) {
+      const rate = row.forecast_day_matrix || 0;
+      const isOverstock = rate > 0 && row.qty > 1 && (row.qty / rate) > OVERSTOCK_DAYS;
+      const isNlq = row.days_since_last_sale === null || row.days_since_last_sale > NLQ_DAYS;
+      const val = row.qty * (row.purchase_price || 0);
+
+      if (isOverstock && isNlq)   { both++;          bothVal     += val; }
+      else if (isOverstock)       { overstockOnly++;  overstockVal += val; }
+      else if (isNlq)             { nlqOnly++;        nlqVal      += val; }
+      else                        { normal++;         normalVal   += val; }
+
+      let peakMonths = [];
+      try { peakMonths = JSON.parse(row.peak_months || '[]'); } catch {}
+      const upcoming = peakMonths.some(m => { const d = ((m - curM + 12) % 12); return d >= 1 && d <= 3; });
+      if (upcoming && (row.forecast_to_order || 0) > 0) preSeasonCount++;
+    }
+
+    res.json({
+      segments: {
+        normal:        { count: normal,        value: Math.round(normalVal)    },
+        overstock_only:{ count: overstockOnly,  value: Math.round(overstockVal) },
+        nlq_only:      { count: nlqOnly,        value: Math.round(nlqVal)       },
+        both:          { count: both,           value: Math.round(bothVal)      },
+      },
+      pre_season_count: preSeasonCount,
+      total_with_stock: normal + overstockOnly + nlqOnly + both,
+      total_stock_value: Math.round(normalVal + overstockVal + nlqVal + bothVal),
+    });
+  } catch (err) {
+    console.error('/api/analytics/summary', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/analytics/sales-by-year', (req, res) => {
+  try {
+    const pathStr = String(req.query.path || '');
+    const pathParts = pathStr ? pathStr.split(' / ') : [];
+    const { where: pw, params: pp } = catalogPathWhere(pathParts);
+    const cpFilter = pw ? `AND ${pw}` : '';
+
+    const rows = db.prepare(`
+      SELECT CAST(strftime('%Y', cs.sale_date) AS INTEGER) AS year,
+             CAST(strftime('%m', cs.sale_date) AS INTEGER) AS month,
+             ROUND(SUM(MAX(0.0, CAST(cs.sales_qty AS REAL) - CAST(cs.return_qty AS REAL))), 1) AS net_qty,
+             ROUND(SUM(MAX(0.0, CAST(cs.sales_qty AS REAL) - CAST(cs.return_qty AS REAL))
+                       * COALESCE(cp.retail_price, 0)), 1) AS revenue
+      FROM catalog_sales cs
+      JOIN catalog_products cp ON cp.item_code = cs.item_code
+      WHERE cs.sale_date >= '2024-01-01' ${cpFilter}
+      GROUP BY year, month
+      ORDER BY year, month
+    `).all(...pp);
+
+    res.json(rows);
+  } catch (err) {
+    console.error('/api/analytics/sales-by-year', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/analytics/suppliers', (req, res) => {
+  try {
+    const pathStr = String(req.query.path || '');
+    const pathParts = pathStr ? pathStr.split(' / ') : [];
+    const { where: pw, params: pp } = catalogPathWhere(pathParts);
+    const cpFilter = pw ? `AND ${pw}` : '';
+
+    const itemRows = db.prepare(`
+      SELECT s.supplier_name,
+             CAST(cp.qty AS REAL) AS qty,
+             CAST(cp.purchase_price AS REAL) AS purchase_price,
+             cf.forecast_day_matrix,
+             cf.abc_class, cf.xyz_class,
+             cf.to_order AS forecast_to_order,
+             cf.peak_months,
+             CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) AS days_since_last_sale
+      FROM catalog_products cp
+      JOIN products pr ON pr.barcode = cp.barcode
+                       AND cp.barcode IS NOT NULL AND length(cp.barcode) >= 6
+      JOIN product_supplier_map psm ON psm.product_id = pr.id AND psm.is_primary = 1
+      JOIN suppliers s ON s.id = psm.supplier_id
+      LEFT JOIN catalog_forecast cf ON cf.item_code = cp.item_code
+      LEFT JOIN (
+        SELECT item_code, MAX(sale_date) AS last_sale_date
+        FROM catalog_sales GROUP BY item_code
+      ) ls ON ls.item_code = cp.item_code
+      WHERE cp.qty > 0 ${cpFilter}
+    `).all(...pp);
+
+    const now = new Date();
+    const curM = now.getMonth() + 1;
+    const supMap = new Map();
+
+    for (const row of itemRows) {
+      if (!supMap.has(row.supplier_name)) {
+        supMap.set(row.supplier_name, {
+          supplier_name: row.supplier_name, items_with_stock: 0,
+          nlq_count: 0, nlq_value: 0, overstock_count: 0, overstock_value: 0,
+          both_count: 0, both_value: 0, total_value: 0,
+          abc_a_count: 0, xyz_x_count: 0, pre_season_count: 0,
+        });
+      }
+      const s = supMap.get(row.supplier_name);
+      s.items_with_stock++;
+      const rate = row.forecast_day_matrix || 0;
+      const isOverstock = rate > 0 && row.qty > 1 && (row.qty / rate) > OVERSTOCK_DAYS;
+      const isNlq = row.days_since_last_sale === null || row.days_since_last_sale > NLQ_DAYS;
+      const val = row.qty * (row.purchase_price || 0);
+      s.total_value += val;
+      if (isNlq) { s.nlq_count++; s.nlq_value += val; }
+      if (isOverstock) { s.overstock_count++; s.overstock_value += val; }
+      if (isNlq && isOverstock) { s.both_count++; s.both_value += val; }
+      if (row.abc_class === 'A') s.abc_a_count++;
+      if (row.xyz_class === 'X') s.xyz_x_count++;
+      let pm = [];
+      try { pm = JSON.parse(row.peak_months || '[]'); } catch {}
+      if (pm.some(m => { const d = ((m - curM + 12) % 12); return d >= 1 && d <= 3; }) && (row.forecast_to_order || 0) > 0) s.pre_season_count++;
+    }
+
+    const results = Array.from(supMap.values()).map(s => {
+      const base = s.items_with_stock || 1;
+      const nlqRatio   = s.nlq_count      / base;
+      const osRatio    = s.overstock_count / base;
+      const abcARatio  = s.abc_a_count     / base;
+      const xyzXRatio  = s.xyz_x_count     / base;
+      const score = Math.round(((1 - nlqRatio) * 0.35 + (1 - osRatio) * 0.35 + abcARatio * 0.20 + xyzXRatio * 0.10) * 100);
+      return {
+        ...s,
+        nlq_value:      Math.round(s.nlq_value),
+        overstock_value:Math.round(s.overstock_value),
+        total_value:    Math.round(s.total_value),
+        nlq_pct:   Math.round(nlqRatio  * 100),
+        os_pct:    Math.round(osRatio   * 100),
+        score,
+      };
+    });
+    results.sort((a, b) => b.nlq_count - a.nlq_count);
+    res.json(results);
+  } catch (err) {
+    console.error('/api/analytics/suppliers', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/analytics/items', (req, res) => {
+  try {
+    const pathStr    = String(req.query.path     || '');
+    const segment    = String(req.query.segment  || 'overstock_only');
+    const supplierName = String(req.query.supplier || '');
+    const limit      = Math.min(200, Math.max(1, Number(req.query.limit  || 100)));
+    const offset     = Math.max(0, Number(req.query.offset || 0));
+
+    const pathParts  = pathStr ? pathStr.split(' / ') : [];
+    const { where: pw, params: pp } = catalogPathWhere(pathParts);
+
+    const conditions = ['cp.qty > 0'];
+    const params     = [...pp];
+
+    if (pw) conditions.push(pw);
+
+    const overstockCond = `(cf.forecast_day_matrix > 0 AND cp.qty > 1 AND CAST(cp.qty AS REAL)/cf.forecast_day_matrix > ${OVERSTOCK_DAYS})`;
+    const nlqCond       = `(ls.last_sale_date IS NULL OR CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) > ${NLQ_DAYS})`;
+
+    if (segment === 'overstock_only') {
+      conditions.push(overstockCond, `NOT ${nlqCond}`);
+    } else if (segment === 'nlq_only') {
+      conditions.push(nlqCond, `NOT ${overstockCond}`);
+    } else if (segment === 'both') {
+      conditions.push(overstockCond, nlqCond);
+    } else if (segment === 'normal') {
+      conditions.push(`NOT ${overstockCond}`, `NOT ${nlqCond}`);
+    } else if (segment === 'pre_season') {
+      const curM = new Date().getMonth() + 1;
+      const upcoming = [1, 2, 3].map(d => ((curM - 1 + d) % 12) + 1);
+      const peakLikes = upcoming.map(() => `cf.peak_months LIKE ?`).join(' OR ');
+      conditions.push(`(${peakLikes})`, `CAST(COALESCE(cf.to_order, 0) AS INTEGER) > 0`);
+      params.push(...upcoming.map(m => `%${m}%`));
+    } else if (segment === 'all_nlq') {
+      conditions.push(nlqCond);
+    } else if (segment === 'all_overstock') {
+      conditions.push(overstockCond);
+    }
+
+    let supplierJoin = '';
+    if (supplierName) {
+      supplierJoin = `
+        JOIN products pr2 ON pr2.barcode = cp.barcode AND cp.barcode IS NOT NULL AND length(cp.barcode) >= 6
+        JOIN product_supplier_map psm2 ON psm2.product_id = pr2.id AND psm2.is_primary = 1
+        JOIN suppliers s2 ON s2.id = psm2.supplier_id AND s2.supplier_name = ?`;
+      params.push(supplierName);
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    const baseJoins = `
+      LEFT JOIN catalog_forecast cf ON cf.item_code = cp.item_code
+      LEFT JOIN (
+        SELECT item_code, MAX(sale_date) AS last_sale_date
+        FROM catalog_sales GROUP BY item_code
+      ) ls ON ls.item_code = cp.item_code
+      ${supplierJoin}
+    `;
+
+    const total = db.prepare(`
+      SELECT COUNT(*) AS cnt FROM catalog_products cp ${baseJoins} ${where}
+    `).get(...params).cnt;
+
+    const items = db.prepare(`
+      SELECT cp.id, cp.item_code, cp.item_name, cp.barcode, cp.qty,
+             cp.purchase_price, cp.retail_price,
+             cp.parent_name, cp.group_l0, cp.group_l1, cp.group_full_path,
+             cf.forecast_day_matrix, cf.abc_class, cf.xyz_class,
+             cf.to_order AS forecast_to_order,
+             ls.last_sale_date,
+             CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) AS days_since_last_sale,
+             CASE WHEN cf.forecast_day_matrix > 0
+               THEN ROUND(CAST(cp.qty AS REAL) / cf.forecast_day_matrix, 0)
+               ELSE NULL END AS coverage_days
+      FROM catalog_products cp ${baseJoins} ${where}
+      ORDER BY cp.qty * COALESCE(cp.purchase_price, 0) DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset);
+
+    res.json({ items, total, limit, offset, has_more: offset + items.length < total });
+  } catch (err) {
+    console.error('/api/analytics/items', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const distDir = path.resolve(__dirname, 'dist');
 app.use('/inventory-manager-web/assets', express.static(path.join(distDir, 'assets'), {
   setHeaders: (res) => {
