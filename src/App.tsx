@@ -1727,7 +1727,15 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
       </div>
 
       {/* ── Right content ──────────────────────────────────────────────── */}
-      <div style={{flex:1,overflowY:'auto',padding:'14px 18px'}}>
+      <div style={{flex:1,overflowY:'auto',padding:'14px 18px', position:'relative'}}>
+        {loading && (
+          <div style={{position:'sticky', top:0, zIndex:20, display:'flex', justifyContent:'center', pointerEvents:'none'}}>
+            <div style={{display:'inline-flex', alignItems:'center', gap:8, background:'rgba(15,23,42,.92)', border:'1px solid #334155', borderRadius:999, padding:'8px 14px', color:'#cbd5e1', fontSize:'0.82em', marginBottom:10}}>
+              <span className="spinner" style={{width:14, height:14}} />
+              Обновляю аналитику…
+            </div>
+          </div>
+        )}
 
         {/* breadcrumb + collapse toggle */}
         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14,flexWrap:'wrap'}}>
@@ -1796,7 +1804,11 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
           <div style={{display:'flex',gap:14,flexWrap:'wrap',marginBottom:14}}>
             <div style={{background:'#0a1628',borderRadius:8,padding:14,border:'1px solid #1e293b',flexShrink:0}}>
               <div style={{color:'#94a3b8',fontSize:'0.7em',marginBottom:10}}>Структура остатков</div>
-              <AnalyticsDonut summary={summary} drillKey={drillKey} onDrill={drill}/>
+              {loading ? (
+                <div style={{display:'flex', alignItems:'center', justifyContent:'center', minHeight:200, color:'#64748b', fontSize:'0.82em'}}>
+                  <span className="spinner" style={{width:16, height:16, marginRight:8}} /> Загрузка структуры…
+                </div>
+              ) : <AnalyticsDonut summary={summary} drillKey={drillKey} onDrill={drill}/>} 
               {summary.pre_season_count > 0 && (
                 <div style={{marginTop:10,padding:'6px 10px',background:'rgba(167,139,250,.1)',borderRadius:6,border:'1px solid #7c3aed',cursor:'pointer',fontSize:'0.78em',color:'#a78bfa'}}
                   onClick={() => drill('pre_season')}>
@@ -1806,7 +1818,7 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
             </div>
             <div style={{background:'#0a1628',borderRadius:8,padding:14,border:'1px solid #1e293b',flex:1,minWidth:300,overflow:'hidden'}}>
               <div style={{color:'#94a3b8',fontSize:'0.7em',marginBottom:4}}>Продажи по годам</div>
-              {salesData.length > 0 ? <SalesYearChart data={salesData}/> : <div style={{color:'#475569',padding:24,textAlign:'center',fontSize:'0.82em'}}>Нет данных</div>}
+              {loading ? <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:180,color:'#64748b',fontSize:'0.82em'}}><span className="spinner" style={{width:16,height:16,marginRight:8}} /> Загрузка продаж…</div> : (salesData.length > 0 ? <SalesYearChart data={salesData}/> : <div style={{color:'#475569',padding:24,textAlign:'center',fontSize:'0.82em'}}>Нет данных</div>)}
             </div>
           </div>
         )}
@@ -1854,11 +1866,10 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
           <div style={{color:'#e2e8f0',fontWeight:600,fontSize:'0.88em',marginBottom:10}}>
             {suppliers.length} поставщиков · рейтинг: меньше неликвида/перестоя + больше A-товаров
           </div>
-          {suppliers.length > 0
+          {loading ? <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:120,color:'#64748b',fontSize:'0.82em'}}><span className="spinner" style={{width:16,height:16,marginRight:8}} /> Загрузка поставщиков…</div> : (suppliers.length > 0
             ? <SupplierTable suppliers={suppliers} sortKey={supplierSort} onSortChange={setSupplierSort}
                 onDrill={name => drill(`supplier:${name}`)}/>
-            : <div style={{color:'#475569',padding:'16px 0',textAlign:'center',fontSize:'0.82em'}}>Нет данных о поставщиках</div>
-          }
+            : <div style={{color:'#475569',padding:'16px 0',textAlign:'center',fontSize:'0.82em'}}>Нет данных о поставщиках</div>)}
         </div>
 
         {/* Drill-down list */}
