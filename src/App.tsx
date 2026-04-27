@@ -1976,6 +1976,7 @@ export function App() {
 
   // catalog2 (tree catalog from ping JSON)
   const [c2Items, setC2Items] = useState<Catalog2Item[]>([]);
+  const [c2ForecastMap, setC2ForecastMap] = useState<Record<string, any>>({});
   const [c2Total, setC2Total] = useState(0);
   const [c2Offset, setC2Offset] = useState(0);
   const [c2HasMore, setC2HasMore] = useState(false);
@@ -2255,6 +2256,31 @@ export function App() {
     const t = setTimeout(() => c2SearchGroups(c2TreeSearch), 250);
     return () => clearTimeout(t);
   }, [c2TreeSearch]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadForecasts() {
+      const missing = c2Items.slice(0, 50).filter(item => item.id && !(String(item.id) in c2ForecastMap));
+      if (!missing.length) return;
+      const results = await Promise.all(missing.map(async item => {
+        const code = item.item_code?.trim() || String(item.id);
+        try {
+          const data = await fetchJSON<any>(apiUrl(`/api/catalog2/item/${encodeURIComponent(code)}/forecast`));
+          return [String(item.id), data] as const;
+        } catch {
+          return [String(item.id), null] as const;
+        }
+      }));
+      if (cancelled) return;
+      setC2ForecastMap(prev => {
+        const next = {...prev};
+        for (const [id, data] of results) next[id] = data;
+        return next;
+      });
+    }
+    loadForecasts();
+    return () => { cancelled = true; };
+  }, [c2Items]);
 
   useEffect(() => {
     if (!c2Modal) { setC2Forecast(null); return; }
@@ -3122,8 +3148,8 @@ export function App() {
                         {label: 'Подгруппа', key: 'parent_name', right: false},
                         {label: 'ABC·XYZ', key: 'abc_class', right: true},
                         {label: 'Остаток', key: 'qty', right: true},
-                        {label: 'Рек. остаток', key: 'recommended_stock', right: true},
-                        {label: 'Дозакупить', key: 'to_order', right: true},
+                        {label: 'Нужно остатков', key: 'recommended_stock', right: true},
+                        {label: 'Нужно заказать', key: 'to_order', right: true},
                         {label: 'Цена прод.', key: 'retail_price', right: true},
                         {label: 'Цена закуп.', key: 'purchase_price', right: true},
                         {label: 'Посл. продажа', key: 'last_sale_date', right: true},
@@ -3157,7 +3183,23 @@ export function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {c2Items.map(item => {
+                    {(c2SortBy === 'recommended_stock' || c2SortBy === 'to_order' ? [...c2Items].sort((a, b) => {
+                      const fa = c2ForecastMap[String(a.id)];
+                      const fb = c2ForecastMap[String(b.id)];
+                      const recA = fa ? Math.max(0, Math.ceil((fa.forecast_day_matrix || 0) * ((fa.lead_time_days || 0) + (fa.order_cycle_days || 0)) + (fa.ss_total || 0))) : (a.recommended_stock ?? 0);
+                      const recB = fb ? Math.max(0, Math.ceil((fb.forecast_day_matrix || 0) * ((fb.lead_time_days || 0) + (fb.order_cycle_days || 0)) + (fb.ss_total || 0))) : (b.recommended_stock ?? 0);
+                      const ordA = fa ? Math.max(0, Math.ceil(recA - (a.qty || 0))) : Math.max(0, a.to_order ?? a.forecast_to_order ?? 0);
+                      const ordB = fb ? Math.max(0, Math.ceil(recB - (b.qty || 0))) : Math.max(0, b.to_order ?? b.forecast_to_order ?? 0);
+                      const dir = c2SortDir === 'asc' ? 1 : -1;
+                      return (c2SortBy === 'recommended_stock' ? (recA - recB) : (ordA - ordB)) * dir;
+                    }) : c2Items).map(item => {
+                      const forecast = c2ForecastMap[String(item.id)];
+                      const recommendedStock = forecast
+                        ? Math.max(0, Math.ceil((forecast.forecast_day_matrix || 0) * ((forecast.lead_time_days || 0) + (forecast.order_cycle_days || 0)) + (forecast.ss_total || 0)))
+                        : (item.recommended_stock ?? ((item.qty || 0) + Math.max(0, item.to_order ?? item.forecast_to_order ?? 0)));
+                      const recommendedOrder = forecast
+                        ? Math.max(0, Math.ceil(recommendedStock - (item.qty || 0)))
+                        : Math.max(0, item.to_order ?? item.forecast_to_order ?? 0);
                       const days = item.days_since_last_sale;
                       const rowBase = days === null ? 'rgba(239,68,68,.09)'
                         : days >= 365 ? 'rgba(239,68,68,.09)'
@@ -3189,16 +3231,14 @@ export function App() {
                           </td>
                           <td style={{padding: '7px 10px', textAlign: 'right', fontWeight: 600, color: item.qty > 0 ? '#22c55e' : '#334155'}}>
                             <div>{item.qty > 0 ? item.qty.toLocaleString('ru-RU') : '—'}</div>
-                            {((item.to_order ?? item.forecast_to_order ?? 0) > 0) && <div style={{fontSize:'0.72em', color:'#f59e0b', fontWeight:700}}>рекомендуется дозакупить</div>}
+                            {(recommendedOrder > 0) && <div style={{fontSize:'0.72em', color:'#f59e0b', fontWeight:700}}>рекомендуется дозакупить</div>}
                           </td>
                           <td style={{padding: '7px 10px', textAlign: 'right', color: '#93c5fd', fontWeight: 600}}>
-                            {((item.recommended_stock ?? ((item.qty || 0) + Math.max(0, item.to_order ?? item.forecast_to_order ?? 0))) > 0)
-                              ? Math.round(item.recommended_stock ?? ((item.qty || 0) + Math.max(0, item.to_order ?? item.forecast_to_order ?? 0))).toLocaleString('ru-RU')
-                              : '—'}
+                            {recommendedStock > 0 ? Math.round(recommendedStock).toLocaleString('ru-RU') : '—'}
                           </td>
                           <td style={{padding: '7px 10px', textAlign: 'right'}}>
-                            {((item.to_order ?? item.forecast_to_order ?? 0) > 0)
-                              ? <span style={{display:'inline-block', padding:'2px 7px', borderRadius:999, background:'rgba(245,158,11,.14)', color:'#f59e0b', fontSize:'0.74em', fontWeight:700}}>{Math.round(item.to_order ?? item.forecast_to_order ?? 0).toLocaleString('ru-RU')} шт</span>
+                            {recommendedOrder > 0
+                              ? <span style={{display:'inline-block', padding:'2px 7px', borderRadius:999, background:'rgba(245,158,11,.14)', color:'#f59e0b', fontSize:'0.74em', fontWeight:700}}>{Math.round(recommendedOrder).toLocaleString('ru-RU')} шт</span>
                               : <span style={{color:'#334155'}}>—</span>}
                           </td>
                           <td style={{padding: '7px 10px', textAlign: 'right', color: '#e2e8f0'}}>
