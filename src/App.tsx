@@ -3122,6 +3122,8 @@ export function App() {
                         {label: 'Подгруппа', key: 'parent_name', right: false},
                         {label: 'ABC·XYZ', key: 'abc_class', right: true},
                         {label: 'Остаток', key: 'qty', right: true},
+                        {label: 'Рек. остаток', key: 'recommended_stock', right: true},
+                        {label: 'Дозакупить', key: 'to_order', right: true},
                         {label: 'Цена прод.', key: 'retail_price', right: true},
                         {label: 'Цена закуп.', key: 'purchase_price', right: true},
                         {label: 'Посл. продажа', key: 'last_sale_date', right: true},
@@ -3186,7 +3188,16 @@ export function App() {
                             }
                           </td>
                           <td style={{padding: '7px 10px', textAlign: 'right', fontWeight: 600, color: item.qty > 0 ? '#22c55e' : '#334155'}}>
-                            {item.qty > 0 ? item.qty.toLocaleString('ru-RU') : '—'}
+                            <div>{item.qty > 0 ? item.qty.toLocaleString('ru-RU') : '—'}</div>
+                            {item.to_order > 0 && <div style={{fontSize:'0.72em', color:'#f59e0b', fontWeight:700}}>рекомендуется дозакупить</div>}
+                          </td>
+                          <td style={{padding: '7px 10px', textAlign: 'right', color: '#93c5fd', fontWeight: 600}}>
+                            {item.recommended_stock > 0 ? Math.round(item.recommended_stock).toLocaleString('ru-RU') : '—'}
+                          </td>
+                          <td style={{padding: '7px 10px', textAlign: 'right'}}>
+                            {item.to_order > 0
+                              ? <span style={{display:'inline-block', padding:'2px 7px', borderRadius:999, background:'rgba(245,158,11,.14)', color:'#f59e0b', fontSize:'0.74em', fontWeight:700}}>{Math.round(item.to_order).toLocaleString('ru-RU')} шт</span>
+                              : <span style={{color:'#334155'}}>—</span>}
                           </td>
                           <td style={{padding: '7px 10px', textAlign: 'right', color: '#e2e8f0'}}>
                             {item.retail_price > 0 ? item.retail_price.toLocaleString('ru-RU') + ' ₽' : '—'}
@@ -3211,7 +3222,7 @@ export function App() {
                     })}
                     {!c2Loading && !c2Items.length && (
                       <tr>
-                        <td colSpan={8} style={{padding: '40px 16px', textAlign: 'center', color: '#334155'}}>Товары не найдены</td>
+                        <td colSpan={10} style={{padding: '40px 16px', textAlign: 'center', color: '#334155'}}>Товары не найдены</td>
                       </tr>
                     )}
                   </tbody>
