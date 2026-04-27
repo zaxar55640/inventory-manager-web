@@ -158,6 +158,7 @@ type CreateMode = 'single' | 'multi';
 type TabKey = 'create' | 'drafts' | 'orders' | 'nonLiquid' | 'decisions' | 'catalog' | 'catalog2' | 'analytics';
 
 const currency = new Intl.NumberFormat('ru-RU');
+const num = (v: unknown, fallback = '—') => (typeof v === 'number' && Number.isFinite(v) ? v.toLocaleString('ru-RU') : fallback);
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -1427,8 +1428,8 @@ function BreakdownTable({segments, onNavigate, onOpenCatalog}: {
               onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,.04)')}
               onMouseLeave={e=>(e.currentTarget.style.background=i%2===0?'rgba(255,255,255,.015)':'')}>
               <td style={{padding:'5px 8px',color:'#e2e8f0',fontWeight:500,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{seg.name}</td>
-              <td style={{padding:'5px 8px',textAlign:'right',color:'#64748b'}}>{seg.sku_count.toLocaleString('ru-RU')}</td>
-              <td style={{padding:'5px 8px',textAlign:'right',color:'#22c55e'}}>{Math.round(seg.sales_qty_30).toLocaleString('ru-RU')}</td>
+              <td style={{padding:'5px 8px',textAlign:'right',color:'#64748b'}}>{num(seg.sku_count, '0')}</td>
+              <td style={{padding:'5px 8px',textAlign:'right',color:'#22c55e'}}>{num(Math.round(seg.sales_qty_30 || 0), '0')}</td>
               <td style={{padding:'5px 8px',textAlign:'right',color:seg.coverage_days!==null&&seg.coverage_days<21?'#ef4444':seg.coverage_days!==null&&seg.coverage_days>180?'#f59e0b':'#94a3b8'}}>
                 {seg.coverage_days!==null?`${seg.coverage_days} дн.`:'—'}
               </td>
@@ -1679,8 +1680,8 @@ function AnalyticsPage({onOpenCatalog}: {onOpenCatalog?: (path: string) => void}
           {ov && <>
             <div style={{background:'#0a1628',borderRadius:8,padding:'10px 14px',border:'1px solid #1e293b'}}>
               <div style={{color:'#64748b',fontSize:'0.68em',marginBottom:3}}>SKU всего</div>
-              <div style={{color:'#f1f5f9',fontSize:'1.4em',fontWeight:700,lineHeight:1}}>{ov.total_sku.toLocaleString('ru-RU')}</div>
-              <div style={{color:'#475569',fontSize:'0.68em',marginTop:2}}>активных {ov.active_sku.toLocaleString('ru-RU')}</div>
+              <div style={{color:'#f1f5f9',fontSize:'1.4em',fontWeight:700,lineHeight:1}}>{num(ov.total_sku)}</div>
+              <div style={{color:'#475569',fontSize:'0.68em',marginTop:2}}>активных {num(ov.active_sku)}</div>
             </div>
             <div style={{background:'#0a1628',borderRadius:8,padding:'10px 14px',border:'1px solid #1e293b'}}>
               <div style={{color:'#64748b',fontSize:'0.68em',marginBottom:3}}>Сток (закуп.)</div>
@@ -1689,8 +1690,8 @@ function AnalyticsPage({onOpenCatalog}: {onOpenCatalog?: (path: string) => void}
             </div>
             <div style={{background:'#0a1628',borderRadius:8,padding:'10px 14px',border:'1px solid #1e293b'}}>
               <div style={{color:'#64748b',fontSize:'0.68em',marginBottom:3}}>Продажи 30д</div>
-              <div style={{color:'#22c55e',fontSize:'1.4em',fontWeight:700,lineHeight:1}}>{Math.round(ov.total_sales_qty_30).toLocaleString('ru-RU')}</div>
-              <div style={{color:'#475569',fontSize:'0.68em',marginTop:2}}>365д: {Math.round(ov.total_sales_qty_365).toLocaleString('ru-RU')}</div>
+              <div style={{color:'#22c55e',fontSize:'1.4em',fontWeight:700,lineHeight:1}}>{num(Math.round(ov.total_sales_qty_30 || 0), '0')}</div>
+              <div style={{color:'#475569',fontSize:'0.68em',marginTop:2}}>365д: {num(Math.round(ov.total_sales_qty_365 || 0), '0')}</div>
             </div>
             <div style={{background:'#0a1628',borderRadius:8,padding:'10px 14px',border:'1px solid #1e293b'}}>
               <div style={{color:'#64748b',fontSize:'0.68em',marginBottom:3}}>Покрытие</div>
@@ -1702,13 +1703,13 @@ function AnalyticsPage({onOpenCatalog}: {onOpenCatalog?: (path: string) => void}
             <div style={{background:'#0a1628',borderRadius:8,padding:'10px 14px',border:`1px solid ${drillKey==='overstock_only'?'#f97316':'#1e293b'}`,cursor:'pointer'}}
               onClick={() => drill('overstock_only')}>
               <div style={{color:'#64748b',fontSize:'0.68em',marginBottom:3}}>Перестой</div>
-              <div style={{color:'#f97316',fontSize:'1.4em',fontWeight:700,lineHeight:1}}>{(summary.segments.overstock_only.count+summary.segments.both.count).toLocaleString('ru-RU')}</div>
+              <div style={{color:'#f97316',fontSize:'1.4em',fontWeight:700,lineHeight:1}}>{num((summary.segments.overstock_only.count||0)+(summary.segments.both.count||0), '0')}</div>
               <div style={{color:'#475569',fontSize:'0.68em',marginTop:2}}>{((summary.segments.overstock_only.value+summary.segments.both.value)/1e6).toFixed(1)} М₽</div>
             </div>
             <div style={{background:'#0a1628',borderRadius:8,padding:'10px 14px',border:`1px solid ${drillKey==='nlq_only'?'#eab308':'#1e293b'}`,cursor:'pointer'}}
               onClick={() => drill('nlq_only')}>
               <div style={{color:'#64748b',fontSize:'0.68em',marginBottom:3}}>Неликвид</div>
-              <div style={{color:'#eab308',fontSize:'1.4em',fontWeight:700,lineHeight:1}}>{(summary.segments.nlq_only.count+summary.segments.both.count).toLocaleString('ru-RU')}</div>
+              <div style={{color:'#eab308',fontSize:'1.4em',fontWeight:700,lineHeight:1}}>{num((summary.segments.nlq_only.count||0)+(summary.segments.both.count||0), '0')}</div>
               <div style={{color:'#475569',fontSize:'0.68em',marginTop:2}}>{((summary.segments.nlq_only.value+summary.segments.both.value)/1e6).toFixed(1)} М₽</div>
             </div>
           </>}
