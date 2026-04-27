@@ -1943,6 +1943,11 @@ export function App() {
   const [orderPage, setOrderPage] = useState(0);
   const ORDER_PAGE_SIZE = 50;
 
+  // order detail editing
+  const [orderEdits, setOrderEdits] = useState<Map<number, {qty: number; reason: string}>>(new Map());
+  const [orderEditSaving, setOrderEditSaving] = useState(false);
+  const [orderSearch, setOrderSearch] = useState('');
+
   // "Добавить" button feedback
   const [addingId, setAddingId] = useState<number | null>(null);
   const [addedIds, setAddedIds] = useState<Set<number>>(new Set());
@@ -2181,8 +2186,38 @@ export function App() {
   }
 
   async function openOrderDetail(id: number) {
-    setOpenOrder(await fetchJSON<OrderDetail>(apiUrl(`/api/orders/${id}`)));
+    const detail = await fetchJSON<OrderDetail>(apiUrl(`/api/orders/${id}`));
+    setOpenOrder(detail);
     setOrderPage(0);
+    const edits = new Map<number, {qty: number; reason: string}>();
+    for (const item of detail.items) edits.set(item.id, {qty: item.final_qty ?? item.manager_qty, reason: item.reason || ''});
+    setOrderEdits(edits);
+  }
+
+  async function saveOrderEdits() {
+    if (!openOrder) return;
+    setOrderEditSaving(true);
+    try {
+      for (const [itemId, edit] of orderEdits) {
+        const orig = openOrder.items.find(i => i.id === itemId);
+        if (!orig) continue;
+        const origQty = orig.final_qty ?? orig.manager_qty;
+        if (edit.qty !== origQty || edit.reason !== (orig.reason || '')) {
+          await fetchJSON(apiUrl(`/api/drafts/${openOrder.batch.id}/items/${itemId}`), {
+            method: 'POST', body: JSON.stringify({manager_qty: edit.qty, reason: edit.reason}),
+          });
+        }
+      }
+      await openOrderDetail(openOrder.batch.id);
+      await loadOrders();
+    } finally { setOrderEditSaving(false); }
+  }
+
+  async function deleteOrderItem(itemId: number) {
+    if (!openOrder) return;
+    await fetchJSON(apiUrl(`/api/drafts/${openOrder.batch.id}/items/${itemId}`), {method: 'DELETE'});
+    await openOrderDetail(openOrder.batch.id);
+    await loadOrders();
   }
 
   // ── effects ─────────────────────────────────────────────────────────────────
@@ -2398,6 +2433,7 @@ export function App() {
       setCartOpen(false);
       setDraftCartValidated(false);
       await loadOrders();
+      await openOrderDetail(draftId);
       setTab('orders');
       navigateToTab('orders');
     } catch(e) { console.error(e); }
@@ -2880,47 +2916,151 @@ export function App() {
 
         {/* ── ORDERS TAB ─────────────────────────────────────────────────── */}
         {tab === 'orders' && (
-          <section className="card orders-card">
-            <div className="section-head"><div><span className="eyebrow">Заявки</span><h2>Созданные заявки</h2><div className="meta">{orders.length} заявок</div></div></div>
-            <div className="orders-grid">
-              {orders.map(order => (
-                <article key={order.id} className="order-tile">
-                  <div>
-                    <div className="status-badge">{order.status}</div>
-                    <h3>{order.supplier_name}</h3>
-                    <p>{order.items_count} позиций · {currency.format(order.total_qty)}</p>
-                    <span className="meta">{new Date(order.created_at).toLocaleString('ru-RU')}</span>
-                  </div>
-                  <div className="inline-actions">
-                    <button className="primary ghost" onClick={() => openOrderDetail(order.id)}>Открыть</button>
-                    <button className="primary ghost" disabled={order.status === 'completed'}
-                      onClick={() => fetchJSON(apiUrl(`/api/orders/${order.id}/complete`), {method: 'POST'}).then(loadOrders)}>
-                      {order.status === 'completed' ? 'Выполнена' : 'Выполнить'}
-                    </button>
-                  </div>
-                </article>
-              ))}
+          <section className="card orders-card" style={{display:'flex',flexDirection:'column',gap:0}}>
+            {/* Header + search */}
+            <div className="section-head" style={{padding:'16px 20px 12px',borderBottom:'1px solid #1e293b'}}>
+              <div>
+                <span className="eyebrow">Заявки</span>
+                <h2>Созданные заявки</h2>
+                <div className="meta">{orders.length} заявок</div>
+              </div>
+              <input
+                value={orderSearch}
+                onChange={e => setOrderSearch(e.target.value)}
+                placeholder="Поиск по заявке…"
+                style={{maxWidth:240,background:'#1e293b',border:'1px solid #334155',borderRadius:6,padding:'6px 10px',color:'#e2e8f0',fontSize:'0.85rem'}}
+              />
             </div>
+
+            {/* Orders list table */}
+            <div className="table-scroll-hint" style={{flex:'0 0 auto',maxHeight: openOrder ? '30vh' : '60vh',overflowY:'auto'}}>
+              <div className="table-pan-x">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{width:50}}>#</th>
+                      <th>Дата</th>
+                      <th>Статус</th>
+                      <th style={{textAlign:'right'}}>Позиций</th>
+                      <th style={{textAlign:'right'}}>Кол-во</th>
+                      <th style={{width:160}}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orders
+                      .filter(o => !orderSearch || String(o.id).includes(orderSearch) || (o.supplier_name||'').toLowerCase().includes(orderSearch.toLowerCase()))
+                      .map(order => {
+                        const isOpen = openOrder?.batch.id === order.id;
+                        const statusColor = order.status === 'completed' ? '#22c55e' : order.status === 'submitted' ? '#3b82f6' : '#94a3b8';
+                        return (
+                          <tr key={order.id}
+                            onClick={() => isOpen ? setOpenOrder(null) : openOrderDetail(order.id)}
+                            style={{cursor:'pointer', background: isOpen ? '#1e3a5f' : undefined}}>
+                            <td style={{fontWeight:600,color:'#94a3b8'}}>#{order.id}</td>
+                            <td>{new Date(order.created_at).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
+                            <td><span style={{display:'inline-block',padding:'2px 8px',borderRadius:4,background:statusColor+'22',color:statusColor,fontSize:'0.8rem',fontWeight:600}}>{order.status}</span></td>
+                            <td style={{textAlign:'right'}}>{order.items_count}</td>
+                            <td style={{textAlign:'right'}}>{currency.format(order.total_qty)}</td>
+                            <td style={{textAlign:'right'}} onClick={e => e.stopPropagation()}>
+                              <button className="ghost-btn" style={{fontSize:'0.8rem',padding:'3px 8px',marginRight:4}}
+                                onClick={() => isOpen ? setOpenOrder(null) : openOrderDetail(order.id)}>
+                                {isOpen ? 'Свернуть' : 'Открыть'}
+                              </button>
+                              <button className="ghost-btn" style={{fontSize:'0.8rem',padding:'3px 8px',color: order.status==='completed'?'#22c55e':undefined}}
+                                disabled={order.status === 'completed'}
+                                onClick={() => fetchJSON(apiUrl(`/api/orders/${order.id}/complete`), {method:'POST'}).then(loadOrders)}>
+                                {order.status === 'completed' ? 'Выполнена' : 'Выполнить'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Order detail panel */}
             {openOrder && (
-              <div className="card search-card" style={{marginTop: 16}}>
-                <div className="section-head"><div><span className="eyebrow">Состав заявки</span><h2>#{openOrder.batch.id} · {openOrder.batch.supplier_name}</h2><div className="meta">{openOrder.items.length} позиций</div></div>
-                  <button className="ghost-btn" style={{alignSelf: 'flex-start'}} onClick={() => setOpenOrder(null)}>✕ Закрыть</button>
+              <div style={{flex:'1 1 0',overflow:'hidden',display:'flex',flexDirection:'column',borderTop:'2px solid #3b82f6'}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px',background:'#1e293b',flexShrink:0}}>
+                  <div>
+                    <span className="eyebrow">Состав заявки</span>
+                    <span style={{fontWeight:700,fontSize:'1rem',marginLeft:8}}>#{openOrder.batch.id}</span>
+                    <span className="meta" style={{marginLeft:8}}>{openOrder.items.length} позиций</span>
+                  </div>
+                  <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                    <button
+                      className="primary"
+                      disabled={orderEditSaving}
+                      onClick={saveOrderEdits}
+                      style={{fontSize:'0.85rem',padding:'5px 14px'}}>
+                      {orderEditSaving ? 'Сохранение…' : 'Сохранить изменения'}
+                    </button>
+                    <button className="ghost-btn" style={{padding:'5px 10px'}} onClick={() => setOpenOrder(null)}>✕</button>
+                  </div>
                 </div>
-                <div className="search-results">
-                  {orderPagedItems.map(item => (
-                    <div key={item.id} className="search-item">
-                      <div>
-                        <strong>{item.sku_name}</strong>
-                        <div className="meta">{item.final_qty} шт{item.reason ? ` · ${item.reason}` : ''}</div>
-                      </div>
-                    </div>
-                  ))}
+                <div className="table-scroll-hint" style={{flex:'1 1 0',overflowY:'auto'}}>
+                  <div className="table-pan-x">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Товар</th>
+                          <th style={{textAlign:'right',width:80}}>Рек.</th>
+                          <th style={{textAlign:'right',width:110}}>Кол-во</th>
+                          <th>Причина</th>
+                          <th style={{width:40}}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {orderPagedItems.map(item => {
+                          const edit = orderEdits.get(item.id) ?? {qty: item.final_qty ?? item.manager_qty, reason: item.reason || ''};
+                          const changed = edit.qty !== (item.final_qty ?? item.manager_qty) || edit.reason !== (item.reason || '');
+                          return (
+                            <tr key={item.id} style={{background: changed ? '#1e3a2b' : undefined}}>
+                              <td>
+                                <div style={{fontWeight:500,fontSize:'0.85rem'}}>{item.sku_name}</div>
+                                <div className="meta">{item.item_ref}</div>
+                              </td>
+                              <td style={{textAlign:'right',color:'#64748b'}}>{item.recommended_qty ?? '—'}</td>
+                              <td style={{textAlign:'right'}}>
+                                <div style={{display:'flex',alignItems:'center',justifyContent:'flex-end',gap:4}}>
+                                  <button className="ghost-btn" style={{padding:'2px 7px',fontSize:'0.9rem'}}
+                                    onClick={() => setOrderEdits(prev => { const n=new Map(prev); const e=n.get(item.id)??{qty:edit.qty,reason:edit.reason}; n.set(item.id,{...e,qty:Math.max(0,e.qty-1)}); return n; })}>−</button>
+                                  <input type="number" min={0}
+                                    value={edit.qty}
+                                    onChange={e => { const v=parseInt(e.target.value)||0; setOrderEdits(prev => { const n=new Map(prev); n.set(item.id,{...edit,qty:v}); return n; }); }}
+                                    style={{width:52,textAlign:'center',background:'#0f172a',border:'1px solid #334155',borderRadius:4,color:'#e2e8f0',padding:'3px 4px',fontSize:'0.85rem'}} />
+                                  <button className="ghost-btn" style={{padding:'2px 7px',fontSize:'0.9rem'}}
+                                    onClick={() => setOrderEdits(prev => { const n=new Map(prev); const e=n.get(item.id)??{qty:edit.qty,reason:edit.reason}; n.set(item.id,{...e,qty:e.qty+1}); return n; })}>+</button>
+                                </div>
+                              </td>
+                              <td>
+                                <input
+                                  value={edit.reason}
+                                  onChange={e => { const v=e.target.value; setOrderEdits(prev => { const n=new Map(prev); n.set(item.id,{...edit,reason:v}); return n; }); }}
+                                  placeholder="Причина…"
+                                  style={{width:'100%',background:'#0f172a',border:'1px solid #334155',borderRadius:4,color:'#e2e8f0',padding:'3px 6px',fontSize:'0.85rem'}} />
+                              </td>
+                              <td>
+                                <button className="ghost-btn" style={{padding:'3px 7px',color:'#ef4444',fontSize:'0.85rem'}}
+                                  title="Удалить позицию"
+                                  onClick={() => { if (window.confirm('Удалить позицию из заявки?')) deleteOrderItem(item.id); }}>
+                                  ✕
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
                 {openOrder.items.length > ORDER_PAGE_SIZE && (
-                  <div className="inline-actions" style={{marginTop: 12, justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8}}>
-                    <button className="ghost-btn" disabled={orderPage === 0} onClick={() => setOrderPage(p => p - 1)}>← Назад</button>
-                    <span className="meta">Стр. {orderPage + 1} из {Math.ceil(openOrder.items.length / ORDER_PAGE_SIZE)}</span>
-                    <button className="ghost-btn" disabled={(orderPage + 1) * ORDER_PAGE_SIZE >= openOrder.items.length} onClick={() => setOrderPage(p => p + 1)}>Вперёд →</button>
+                  <div style={{display:'flex',gap:8,alignItems:'center',justifyContent:'space-between',padding:'8px 16px',borderTop:'1px solid #1e293b',flexShrink:0}}>
+                    <button className="ghost-btn" disabled={orderPage===0} onClick={() => setOrderPage(p=>p-1)}>← Назад</button>
+                    <span className="meta">Стр. {orderPage+1} из {Math.ceil(openOrder.items.length/ORDER_PAGE_SIZE)}</span>
+                    <button className="ghost-btn" disabled={(orderPage+1)*ORDER_PAGE_SIZE>=openOrder.items.length} onClick={() => setOrderPage(p=>p+1)}>Вперёд →</button>
                   </div>
                 )}
               </div>
