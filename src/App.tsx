@@ -1424,7 +1424,7 @@ function BreakdownTable({segments, loading, onNavigate, onOpenCatalog}: {
       <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.8em'}}>
         <thead>
           <tr style={{background:'#0a1628'}}>
-            {['Сегмент','SKU','Продажи 30д','Покрытие дн.','Dead SKU','Статус',''].map(h => (
+            {['Сегмент','SKU','Продажи 30д','Покрытие дн.','Dead SKU','Статус'].map(h => (
               <th key={h} style={{padding:'5px 8px',textAlign:h==='SKU'||h==='Продажи 30д'||h==='Покрытие дн.'||h==='Dead SKU'?'right':'left',color:'#64748b',fontWeight:500}}>{h}</th>
             ))}
           </tr>
@@ -1443,7 +1443,13 @@ function BreakdownTable({segments, loading, onNavigate, onOpenCatalog}: {
               onClick={() => onNavigate(seg)}
               onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,.04)')}
               onMouseLeave={e=>(e.currentTarget.style.background=i%2===0?'rgba(255,255,255,.015)':'')}>
-              <td style={{padding:'5px 8px',color:'#e2e8f0',fontWeight:500,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{seg.name}</td>
+              <td style={{padding:'5px 8px',color:'#e2e8f0',fontWeight:500,maxWidth:240,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,justifyContent:'space-between'}}>
+                  <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{seg.name}</span>
+                  <button className="ghost-btn" style={{padding:'2px 7px',fontSize:'0.72em',flexShrink:0}}
+                    onClick={e=>{e.stopPropagation();onOpenCatalog(seg.path);}}>→ Каталог</button>
+                </div>
+              </td>
               <td style={{padding:'5px 8px',textAlign:'right',color:'#64748b'}}>{num(seg.sku_count, '0')}</td>
               <td style={{padding:'5px 8px',textAlign:'right',color:'#22c55e'}}>{num(Math.round(seg.sales_qty_30 || 0), '0')}</td>
               <td style={{padding:'5px 8px',textAlign:'right',color:seg.coverage_days!==null&&seg.coverage_days<21?'#ef4444':seg.coverage_days!==null&&seg.coverage_days>180?'#f59e0b':'#94a3b8'}}>
@@ -1454,10 +1460,6 @@ function BreakdownTable({segments, loading, onNavigate, onOpenCatalog}: {
                 <span style={{padding:'2px 7px',borderRadius:4,background:statusColor(seg.healthy_status)+'22',color:statusColor(seg.healthy_status),fontWeight:600,fontSize:'0.88em'}}>
                   {statusLabel(seg.healthy_status)}
                 </span>
-              </td>
-              <td style={{padding:'5px 8px'}}>
-                <button className="ghost-btn" style={{padding:'2px 7px',fontSize:'0.72em'}}
-                  onClick={e=>{e.stopPropagation();onOpenCatalog(seg.path);}}>→ Каталог</button>
               </td>
             </tr>
           ))}
