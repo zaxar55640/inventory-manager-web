@@ -1414,7 +1414,7 @@ function AnalyticsDrillList({drillKey, items, total, loading, onClose, onNavigat
 
 // ─ Segment breakdown table (from /api/catalog2/analytics) ────────────────────
 function BreakdownTable({segments, loading, onNavigate, onOpenCatalog}: {
-  segments: C2AnalyticsSegment[]; loading?: boolean; onNavigate: (path: string) => void; onOpenCatalog: (path: string) => void;
+  segments: C2AnalyticsSegment[]; loading?: boolean; onNavigate: (segment: C2AnalyticsSegment) => void; onOpenCatalog: (path: string) => void;
 }) {
   if (!segments.length) return null;
   const statusColor = (s: string) => s==='healthy'?'#22c55e':s==='deficit'?'#ef4444':'#f59e0b';
@@ -1440,7 +1440,7 @@ function BreakdownTable({segments, loading, onNavigate, onOpenCatalog}: {
           )}
           {segments.map((seg,i) => (
             <tr key={seg.path} style={{borderBottom:'1px solid #1e293b',background:i%2===0?'rgba(255,255,255,.015)':undefined,cursor:'pointer'}}
-              onClick={() => onNavigate(seg.path)}
+              onClick={() => onNavigate(seg)}
               onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,.04)')}
               onMouseLeave={e=>(e.currentTarget.style.background=i%2===0?'rgba(255,255,255,.015)':'')}>
               <td style={{padding:'5px 8px',color:'#e2e8f0',fontWeight:500,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{seg.name}</td>
@@ -1818,11 +1818,11 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
             <BreakdownTable
               segments={breakdown.segments}
               loading={!!segmentLoadingPath}
-              onNavigate={newPath => {
-                const targetNorm = normalizeCatalogPath(newPath);
+              onNavigate={segment => {
                 const currentEntry = treeCache.get(path);
-                const matchedChild = currentEntry?.children?.find(ch => normalizeCatalogPath(path ? `${path} / ${ch.name}` : ch.name) === targetNorm);
-                navigatePath(matchedChild ? (path ? `${path} / ${matchedChild.name}` : matchedChild.name) : newPath);
+                const matchedChild = currentEntry?.children?.find(ch => normalizeCatalogPath(ch.name) === normalizeCatalogPath(segment.name));
+                const fallbackChildPath = path ? `${path} / ${segment.name}` : segment.path;
+                navigatePath(matchedChild ? (path ? `${path} / ${matchedChild.name}` : matchedChild.name) : fallbackChildPath);
               }}
               onOpenCatalog={p => onOpenCatalog?.(p, path)}
             />
