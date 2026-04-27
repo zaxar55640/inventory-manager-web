@@ -1818,11 +1818,28 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
             <BreakdownTable
               segments={breakdown.segments}
               loading={!!segmentLoadingPath}
-              onNavigate={segment => {
+              onNavigate={async segment => {
                 const currentEntry = treeCache.get(path);
                 const matchedChild = currentEntry?.children?.find(ch => normalizeCatalogPath(ch.name) === normalizeCatalogPath(segment.name));
-                const fallbackChildPath = path ? `${path} / ${segment.name}` : segment.path;
-                navigatePath(matchedChild ? (path ? `${path} / ${matchedChild.name}` : matchedChild.name) : fallbackChildPath);
+                if (matchedChild) {
+                  navigatePath(path ? `${path} / ${matchedChild.name}` : matchedChild.name);
+                  return;
+                }
+                try {
+                  const candidates = await fetch(apiUrl(`/api/catalog2/search-groups?q=${encodeURIComponent(segment.name)}`)).then(r => r.json());
+                  const targetNorm = normalizeCatalogPath(path);
+                  const resolved = (Array.isArray(candidates) ? candidates : []).find((c: any) => {
+                    const candNorm = normalizeCatalogPath(c.path || '');
+                    return candNorm.startsWith(targetNorm) && normalizeCatalogPath(c.name || '') === normalizeCatalogPath(segment.name)
+                      && (typeof c.item_count !== 'number' || c.item_count === segment.sku_count);
+                  }) || (Array.isArray(candidates) ? candidates : []).find((c: any) => {
+                    const candNorm = normalizeCatalogPath(c.path || '');
+                    return candNorm.startsWith(targetNorm) && normalizeCatalogPath(c.name || '') === normalizeCatalogPath(segment.name);
+                  });
+                  navigatePath(resolved?.path || segment.path || (path ? `${path} / ${segment.name}` : segment.name));
+                } catch {
+                  navigatePath(segment.path || (path ? `${path} / ${segment.name}` : segment.name));
+                }
               }}
               onOpenCatalog={p => onOpenCatalog?.(p, path)}
             />
