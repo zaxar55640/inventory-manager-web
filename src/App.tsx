@@ -159,6 +159,7 @@ type TabKey = 'create' | 'drafts' | 'orders' | 'nonLiquid' | 'decisions' | 'cata
 
 const currency = new Intl.NumberFormat('ru-RU');
 const num = (v: unknown, fallback = '—') => (typeof v === 'number' && Number.isFinite(v) ? v.toLocaleString('ru-RU') : fallback);
+const normalizeCatalogPath = (path: string) => path.split('/').map(s => s.trim()).filter(Boolean).join(' / ');
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -1475,7 +1476,7 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
   const [treeSearch, setTreeSearch] = useState('');
   const [treeSearchRes, setTreeSearchRes] = useState<C2GroupResult[]>([]);
   // path / data
-  const [path, setPath] = useState(initialPath);
+  const [path, setPath] = useState(normalizeCatalogPath(initialPath));
   const [summary, setSummary] = useState<AnalyticsSummary|null>(null);
   const [salesData, setSalesData] = useState<AnalyticsSaleRow[]>([]);
   const [suppliers, setSuppliers] = useState<AnalyticsSupplier[]>([]);
@@ -1493,7 +1494,7 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
   const [supplierSort, setSupplierSort] = useState<SupplierSortKey>('nlq');
 
   useEffect(() => {
-    if (initialPath) setPath(initialPath);
+    if (initialPath) setPath(normalizeCatalogPath(initialPath));
   }, [initialPath]);
 
   // ── tree loading ──────────────────────────────────────────────────────────
@@ -1632,11 +1633,12 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
   }, [drillKey, path]);
 
   const navigatePath = useCallback(async (newPath: string) => {
-    setSegmentLoadingPath(newPath);
+    const normalized = normalizeCatalogPath(newPath);
+    setSegmentLoadingPath(normalized);
     setLeafItems([]);
     setLeafItemsLoading(false);
-    setPath(newPath);
-    const parts = newPath.split(' / ');
+    setPath(normalized);
+    const parts = normalized.split(' / ');
     for (let i = 1; i <= parts.length; i++) {
       const p = parts.slice(0, i).join(' / ');
       if (!treeExpanded.has(p)) await toggleTree(p);
@@ -1669,7 +1671,7 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
             treeSearchRes.length===0
               ? <div style={{padding:'16px 8px',color:'#334155',fontSize:'0.78em',textAlign:'center'}}>Не найдено</div>
               : treeSearchRes.map((r,idx) => (
-                  <div key={idx} onClick={() => {setPath(r.path);setTreeSearch('');}}
+                  <div key={idx} onClick={() => {setPath(normalizeCatalogPath(r.path));setTreeSearch('');}}
                     style={{padding:'5px 8px',borderRadius:5,cursor:'pointer',marginBottom:1,
                       background:path===r.path?'#1d4ed8':'transparent',fontSize:'0.75em'}}>
                     <div style={{color:path===r.path?'#fff':'#e2e8f0',fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}
@@ -3187,7 +3189,7 @@ export function App() {
 
         {/* ── ANALYTICS TAB ─────────────────────────────────────────────── */}
         {tab === 'analytics' && (
-          <AnalyticsPage initialPath={analyticsReturnPath} onOpenCatalog={(path, analyticsPath) => { setAnalyticsReturnPath(analyticsPath || path || ''); setC2Path(path || ''); setTab('catalog2'); navigateToTab('catalog2'); }}/>
+          <AnalyticsPage initialPath={analyticsReturnPath} onOpenCatalog={(path, analyticsPath) => { setAnalyticsReturnPath(normalizeCatalogPath(analyticsPath || path || '')); setC2Path(normalizeCatalogPath(path || '')); setTab('catalog2'); navigateToTab('catalog2'); }}/>
         )}
 
       </main>
