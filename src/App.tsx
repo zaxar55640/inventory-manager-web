@@ -1633,16 +1633,23 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
   }, [drillKey, path]);
 
   const navigatePath = useCallback(async (newPath: string) => {
-    setSegmentLoadingPath(newPath);
+    const normalizedNewPath = normalizeCatalogPath(newPath);
+    const cachedPaths = new Set<string>();
+    for (const [parent, entry] of treeCache.entries()) {
+      if (parent) cachedPaths.add(parent);
+      for (const child of entry.children) cachedPaths.add(parent ? `${parent} / ${child.name}` : child.name);
+    }
+    const resolvedPath = Array.from(cachedPaths).find(p => normalizeCatalogPath(p) === normalizedNewPath) || newPath;
+    setSegmentLoadingPath(resolvedPath);
     setLeafItems([]);
     setLeafItemsLoading(false);
-    setPath(newPath);
-    const parts = newPath.split(' / ');
+    setPath(resolvedPath);
+    const parts = resolvedPath.split(' / ');
     for (let i = 1; i <= parts.length; i++) {
       const p = parts.slice(0, i).join(' / ');
       if (!treeExpanded.has(p)) await toggleTree(p);
     }
-  }, [treeExpanded, toggleTree]);
+  }, [treeCache, treeExpanded, toggleTree]);
 
   // ── computed KPIs ─────────────────────────────────────────────────────────
   const ov = breakdown?.overview;
