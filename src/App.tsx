@@ -2433,7 +2433,7 @@ export function App() {
       setCartOpen(false);
       setDraftCartValidated(false);
       await loadOrders();
-      await openOrderDetail(draftId);
+      try { await openOrderDetail(draftId); } catch(e2) { console.error('order detail load failed', e2); }
       setTab('orders');
       navigateToTab('orders');
     } catch(e) { console.error(e); }
@@ -2916,24 +2916,23 @@ export function App() {
 
         {/* ── ORDERS TAB ─────────────────────────────────────────────────── */}
         {tab === 'orders' && (
-          <section className="card orders-card" style={{display:'flex',flexDirection:'column',gap:0}}>
+          <section className="card orders-card" style={{display:'flex',flexDirection:'column',height:'calc(100vh - 56px)',overflow:'hidden',padding:0}}>
             {/* Header + search */}
-            <div className="section-head" style={{padding:'16px 20px 12px',borderBottom:'1px solid #1e293b'}}>
-              <div>
-                <span className="eyebrow">Заявки</span>
-                <h2>Созданные заявки</h2>
-                <div className="meta">{orders.length} заявок</div>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px',borderBottom:'1px solid #1e293b',flexShrink:0,gap:12,flexWrap:'wrap'}}>
+              <div style={{display:'flex',alignItems:'baseline',gap:10}}>
+                <h2 style={{margin:0,fontSize:'1rem',fontWeight:700}}>Созданные заявки</h2>
+                <span className="meta">{orders.length} заявок</span>
               </div>
               <input
                 value={orderSearch}
                 onChange={e => setOrderSearch(e.target.value)}
-                placeholder="Поиск по заявке…"
-                style={{maxWidth:240,background:'#1e293b',border:'1px solid #334155',borderRadius:6,padding:'6px 10px',color:'#e2e8f0',fontSize:'0.85rem'}}
+                placeholder="Поиск…"
+                style={{width:180,background:'#1e293b',border:'1px solid #334155',borderRadius:6,padding:'5px 10px',color:'#e2e8f0',fontSize:'0.83rem'}}
               />
             </div>
 
             {/* Orders list table */}
-            <div className="table-scroll-hint" style={{flex:'0 0 auto',maxHeight: openOrder ? '30vh' : '60vh',overflowY:'auto'}}>
+            <div className="table-scroll-hint" style={{flex: openOrder ? '0 0 38%' : '1 1 0',minHeight:0,overflowY:'auto'}}>
               <div className="table-pan-x">
                 <table>
                   <thead>
@@ -2982,7 +2981,7 @@ export function App() {
 
             {/* Order detail panel */}
             {openOrder && (
-              <div style={{flex:'1 1 0',overflow:'hidden',display:'flex',flexDirection:'column',borderTop:'2px solid #3b82f6'}}>
+              <div style={{flex:'1 1 0',minHeight:0,overflow:'hidden',display:'flex',flexDirection:'column',borderTop:'2px solid #3b82f6'}}>
                 <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px',background:'#1e293b',flexShrink:0}}>
                   <div>
                     <span className="eyebrow">Состав заявки</span>
@@ -3000,7 +2999,7 @@ export function App() {
                     <button className="ghost-btn" style={{padding:'5px 10px'}} onClick={() => setOpenOrder(null)}>✕</button>
                   </div>
                 </div>
-                <div className="table-scroll-hint" style={{flex:'1 1 0',overflowY:'auto'}}>
+                <div className="table-scroll-hint" style={{flex:'1 1 0',minHeight:0,overflowY:'auto'}}>
                   <div className="table-pan-x">
                     <table>
                       <thead>
@@ -3670,21 +3669,20 @@ export function App() {
 
         {/* ── DRAFT ORDER TAB ("Заявка") ─────────────────────────────────── */}
         {tab === 'draftOrder' && (
-          <section className="card orders-card" style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
-            <div className="section-head" style={{flexShrink:0}}>
-              <div>
-                <span className="eyebrow">Формирование заявки</span>
-                <h2>Заявка</h2>
-                <div className="meta">{draftCart.size} позиций</div>
+          <section className="card orders-card" style={{display:'flex',flexDirection:'column',height:'calc(100vh - 56px)',overflow:'hidden',padding:0}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px',borderBottom:'1px solid #1e293b',flexShrink:0,gap:12,flexWrap:'wrap'}}>
+              <div style={{display:'flex',alignItems:'baseline',gap:10}}>
+                <h2 style={{margin:0,fontSize:'1rem',fontWeight:700}}>Заявка</h2>
+                <span className="meta">{draftCart.size} позиций</span>
               </div>
-              <button className="ghost-btn" style={{alignSelf:'flex-start'}}
+              <button className="ghost-btn" style={{fontSize:'0.82rem',padding:'4px 10px'}}
                 onClick={() => { setTab('catalog2'); navigateToTab('catalog2'); }}>
-                ← Вернуться в каталог
+                ← В каталог
               </button>
             </div>
 
             {draftCartValidated && Array.from(draftCart.values()).some(e => e.qty !== e.recommendedOrder && !e.reason.trim()) && (
-              <div style={{padding:'10px 16px',background:'rgba(239,68,68,.1)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,margin:'0 0 12px',fontSize:'0.84em',color:'#f87171',flexShrink:0}}>
+              <div style={{padding:'8px 16px',background:'rgba(239,68,68,.1)',borderBottom:'1px solid rgba(239,68,68,.3)',fontSize:'0.83em',color:'#f87171',flexShrink:0}}>
                 ⚠ Заполните причины отклонения для позиций, где количество отличается от рекомендованного.
               </div>
             )}
@@ -3697,15 +3695,15 @@ export function App() {
                 </span>
               </div>
             ) : (
-              <div style={{flex:1,overflowY:'auto'}}>
-                <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.84em'}}>
+              <div style={{flex:1,minHeight:0,overflowY:'auto'}}>
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.83em'}}>
                   <thead>
                     <tr style={{background:'#0a1628',position:'sticky',top:0,zIndex:3}}>
-                      <th style={{padding:'7px 12px',textAlign:'left',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b'}}>Товар</th>
-                      <th style={{padding:'7px 10px',textAlign:'right',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b',whiteSpace:'nowrap'}}>Рекоменд.</th>
-                      <th style={{padding:'7px 10px',textAlign:'right',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b',whiteSpace:'nowrap'}}>Кол-во</th>
-                      <th style={{padding:'7px 12px',textAlign:'left',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b'}}>Причина отклонения</th>
-                      <th style={{padding:'7px 8px',borderBottom:'1px solid #1e293b',width:32}}/>
+                      <th style={{padding:'6px 12px',textAlign:'left',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b'}}>Товар</th>
+                      <th style={{padding:'6px 10px',textAlign:'right',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b',whiteSpace:'nowrap'}}>Рек.</th>
+                      <th style={{padding:'6px 10px',textAlign:'right',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b',whiteSpace:'nowrap'}}>Кол-во</th>
+                      <th style={{padding:'6px 12px',textAlign:'left',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b'}}>Причина отклонения</th>
+                      <th style={{padding:'6px 8px',borderBottom:'1px solid #1e293b',width:32}}/>
                     </tr>
                   </thead>
                   <tbody>
