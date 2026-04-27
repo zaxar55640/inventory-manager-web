@@ -1818,7 +1818,12 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
             <BreakdownTable
               segments={breakdown.segments}
               loading={!!segmentLoadingPath}
-              onNavigate={newPath => navigatePath(newPath)}
+              onNavigate={newPath => {
+                const targetNorm = normalizeCatalogPath(newPath);
+                const currentEntry = treeCache.get(path);
+                const matchedChild = currentEntry?.children?.find(ch => normalizeCatalogPath(path ? `${path} / ${ch.name}` : ch.name) === targetNorm);
+                navigatePath(matchedChild ? (path ? `${path} / ${matchedChild.name}` : matchedChild.name) : newPath);
+              }}
               onOpenCatalog={p => onOpenCatalog?.(p, path)}
             />
           </div>
