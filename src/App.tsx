@@ -1301,9 +1301,9 @@ function SupplierTable({suppliers, sortKey, onSortChange, onDrill}: {
 
 // ─ Drill-down list with sorting ───────────────────────────────────────────────
 type DrillSort = 'value'|'qty'|'coverage'|'days';
-function AnalyticsDrillList({drillKey, items, total, loading, onClose, onNavigate}: {
+function AnalyticsDrillList({drillKey, items, total, loading, onClose, onNavigate, navigateLabel = '→ Каталог'}: {
   drillKey: string; items: AnalyticsDrillItem[]; total: number; loading: boolean;
-  onClose: () => void; onNavigate?: (path: string) => void;
+  onClose: () => void; onNavigate?: (path: string) => void; navigateLabel?: string;
 }) {
   const [sort, setSort] = useState<DrillSort>('value');
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('desc');
@@ -1395,6 +1395,13 @@ function AnalyticsDrillList({drillKey, items, total, loading, onClose, onNavigat
           </table>
         </div>
       )}
+      {!loading && !!onNavigate && items.length > 0 && (
+        <div style={{padding:'8px 12px', background:'#0a1628', borderTop:'1px solid #1e293b'}}>
+          <button className="ghost-btn" style={{padding:'4px 10px', fontSize:'0.78em'}} onClick={() => onNavigate(items[0].group_full_path || items[0].group_l0 || '')}>
+            {navigateLabel}
+          </button>
+        </div>
+      )}
       {total > items.length && !loading && (
         <div style={{padding:'5px 12px',color:'#64748b',fontSize:'0.75em',background:'#0a1628'}}>
           Показано {items.length} из {total.toLocaleString('ru-RU')} · сортировка применена к первым {items.length}
@@ -1405,8 +1412,8 @@ function AnalyticsDrillList({drillKey, items, total, loading, onClose, onNavigat
 }
 
 // ─ Segment breakdown table (from /api/catalog2/analytics) ────────────────────
-function BreakdownTable({segments, onNavigate, onOpenCatalog}: {
-  segments: C2AnalyticsSegment[]; onNavigate: (path: string) => void; onOpenCatalog: (path: string) => void;
+function BreakdownTable({segments, loading, onNavigate, onOpenCatalog}: {
+  segments: C2AnalyticsSegment[]; loading?: boolean; onNavigate: (path: string) => void; onOpenCatalog: (path: string) => void;
 }) {
   if (!segments.length) return null;
   const statusColor = (s: string) => s==='healthy'?'#22c55e':s==='deficit'?'#ef4444':'#f59e0b';
@@ -1422,6 +1429,14 @@ function BreakdownTable({segments, onNavigate, onOpenCatalog}: {
           </tr>
         </thead>
         <tbody>
+          {loading && (
+            <tr>
+              <td colSpan={7} style={{padding:'14px 10px', color:'#94a3b8'}}>
+                <span className="spinner" style={{display:'inline-block', width:14, height:14, marginRight:8, verticalAlign:'-2px'}} />
+                Загружаю сегмент…
+              </td>
+            </tr>
+          )}
           {segments.map((seg,i) => (
             <tr key={seg.path} style={{borderBottom:'1px solid #1e293b',background:i%2===0?'rgba(255,255,255,.015)':undefined,cursor:'pointer'}}
               onClick={() => onNavigate(seg.path)}
@@ -1452,7 +1467,7 @@ function BreakdownTable({segments, onNavigate, onOpenCatalog}: {
 }
 
 // ─ Main AnalyticsPage component ───────────────────────────────────────────────
-function AnalyticsPage({onOpenCatalog}: {onOpenCatalog?: (path: string) => void}) {
+function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path: string, analyticsPath?: string) => void; initialPath?: string}) {
   // tree state
   const [treeOpen, setTreeOpen] = useState(true);
   const [treeCache, setTreeCache] = useState<Map<string,{children:{name:string;item_count:number}[];directItems:number}>>(new Map());
@@ -1460,12 +1475,15 @@ function AnalyticsPage({onOpenCatalog}: {onOpenCatalog?: (path: string) => void}
   const [treeSearch, setTreeSearch] = useState('');
   const [treeSearchRes, setTreeSearchRes] = useState<C2GroupResult[]>([]);
   // path / data
-  const [path, setPath] = useState('');
+  const [path, setPath] = useState(initialPath);
   const [summary, setSummary] = useState<AnalyticsSummary|null>(null);
   const [salesData, setSalesData] = useState<AnalyticsSaleRow[]>([]);
   const [suppliers, setSuppliers] = useState<AnalyticsSupplier[]>([]);
   const [breakdown, setBreakdown] = useState<C2AnalyticsSummary|null>(null);
   const [loading, setLoading] = useState(false);
+  const [segmentLoadingPath, setSegmentLoadingPath] = useState<string|null>(null);
+  const [leafItems, setLeafItems] = useState<AnalyticsDrillItem[]>([]);
+  const [leafItemsLoading, setLeafItemsLoading] = useState(false);
   // drill-down
   const [drillKey, setDrillKey] = useState<string|null>(null);
   const [drillItems, setDrillItems] = useState<AnalyticsDrillItem[]>([]);
@@ -1473,6 +1491,10 @@ function AnalyticsPage({onOpenCatalog}: {onOpenCatalog?: (path: string) => void}
   const [drillLoading, setDrillLoading] = useState(false);
   // supplier sort
   const [supplierSort, setSupplierSort] = useState<SupplierSortKey>('nlq');
+
+  useEffect(() => {
+    if (initialPath) setPath(initialPath);
+  }, [initialPath]);
 
   // ── tree loading ──────────────────────────────────────────────────────────
   const loadTreeChildren = useCallback(async (p: string) => {
@@ -1548,6 +1570,48 @@ function AnalyticsPage({onOpenCatalog}: {onOpenCatalog?: (path: string) => void}
     .finally(() => setLoading(false));
   }, [path]);
 
+  useEffect(() => {
+    const segs = breakdown?.segments || [];
+    const isLeaf = !!path && (!segs.length || (segs.length === 1 && segs[0].path.replace(/\s+/g, ' ').trim() === path.replace(/\s+/g, ' ').trim()));
+    if (!isLeaf) {
+      setLeafItems([]);
+      setLeafItemsLoading(false);
+      setSegmentLoadingPath(null);
+      return;
+    }
+    let cancelled = false;
+    setLeafItemsLoading(true);
+    const params = new URLSearchParams({limit: '100', path, sort_by: 'qty', sort_dir: 'desc'});
+    fetch(apiUrl(`/api/catalog2/items?${params}`))
+      .then(r => r.json())
+      .then(d => {
+        if (cancelled) return;
+        const mapped = Array.isArray(d.items) ? d.items.map((item: any) => ({
+          id: item.id,
+          item_code: item.item_code ?? null,
+          item_name: item.item_name,
+          barcode: item.barcode ?? null,
+          qty: item.qty ?? 0,
+          purchase_price: item.purchase_price ?? 0,
+          retail_price: item.retail_price ?? 0,
+          parent_name: item.parent_name ?? null,
+          group_l0: item.group_l0 ?? null,
+          group_full_path: path,
+          forecast_day_matrix: item.forecast_day_matrix ?? null,
+          abc_class: item.abc_class ?? null,
+          xyz_class: item.xyz_class ?? null,
+          forecast_to_order: item.forecast_to_order ?? null,
+          last_sale_date: item.last_sale_date ?? null,
+          days_since_last_sale: item.days_since_last_sale ?? null,
+          coverage_days: item.coverage_days ?? null,
+        })) : [];
+        setLeafItems(mapped);
+      })
+      .catch(() => { if (!cancelled) setLeafItems([]); })
+      .finally(() => { if (!cancelled) { setLeafItemsLoading(false); setSegmentLoadingPath(null); } });
+    return () => { cancelled = true; };
+  }, [breakdown, path]);
+
   // ── drill-down ────────────────────────────────────────────────────────────
   const drill = useCallback(async (key: string) => {
     if (drillKey === key) { setDrillKey(null); setDrillItems([]); return; }
@@ -1567,13 +1631,15 @@ function AnalyticsPage({onOpenCatalog}: {onOpenCatalog?: (path: string) => void}
     finally { setDrillLoading(false); }
   }, [drillKey, path]);
 
-  const navigatePath = useCallback((newPath: string) => {
+  const navigatePath = useCallback(async (newPath: string) => {
+    setSegmentLoadingPath(newPath);
+    setLeafItems([]);
+    setLeafItemsLoading(false);
     setPath(newPath);
-    // Auto-expand tree to show the path
     const parts = newPath.split(' / ');
     for (let i = 1; i <= parts.length; i++) {
       const p = parts.slice(0, i).join(' / ');
-      if (!treeExpanded.has(p)) toggleTree(p);
+      if (!treeExpanded.has(p)) await toggleTree(p);
     }
   }, [treeExpanded, toggleTree]);
 
@@ -1743,8 +1809,9 @@ function AnalyticsPage({onOpenCatalog}: {onOpenCatalog?: (path: string) => void}
             </div>
             <BreakdownTable
               segments={breakdown.segments}
+              loading={!!segmentLoadingPath}
               onNavigate={newPath => navigatePath(newPath)}
-              onOpenCatalog={p => onOpenCatalog?.(p)}
+              onOpenCatalog={p => onOpenCatalog?.(p, path)}
             />
           </div>
         )}
@@ -1767,7 +1834,19 @@ function AnalyticsPage({onOpenCatalog}: {onOpenCatalog?: (path: string) => void}
           <AnalyticsDrillList
             drillKey={drillKey} items={drillItems} total={drillTotal} loading={drillLoading}
             onClose={() => { setDrillKey(null); setDrillItems([]); }}
-            onNavigate={onOpenCatalog}
+            onNavigate={p => onOpenCatalog?.(p, path)}
+          />
+        )}
+
+        {!!path && !drillKey && (leafItemsLoading || leafItems.length > 0) && (
+          <AnalyticsDrillList
+            drillKey={`segment:${path}`}
+            items={leafItems}
+            total={leafItems.length}
+            loading={leafItemsLoading}
+            onClose={() => { setLeafItems([]); setLeafItemsLoading(false); }}
+            onNavigate={() => onOpenCatalog?.(path)}
+            navigateLabel="→ Открыть сегмент в каталоге"
           />
         )}
 
@@ -1860,6 +1939,7 @@ export function App() {
   const [c2Loading, setC2Loading] = useState(false);
   const [c2Search, setC2Search] = useState('');
   const [c2Path, setC2Path] = useState('');
+  const [analyticsReturnPath, setAnalyticsReturnPath] = useState('');
   const [c2Expanded, setC2Expanded] = useState<Set<string>>(new Set());
   const [c2TreeCache, setC2TreeCache] = useState<Map<string, C2TreeEntry>>(new Map());
   const [c2Modal, setC2Modal] = useState<Catalog2Item | null>(null);
@@ -2909,6 +2989,14 @@ export function App() {
               <div style={{padding: '10px 14px 8px', borderBottom: '1px solid #1e293b', background: '#0a1628', flexShrink: 0}}>
                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 6}}>
                   {/* Tree toggle + Breadcrumb */}
+                  <div style={{display:'flex', gap:6, alignItems:'center'}}>
+                  {analyticsReturnPath && (
+                    <button
+                      onClick={() => { setTab('analytics'); navigateToTab('analytics'); }}
+                      className="ghost-btn"
+                      style={{padding:'3px 8px', fontSize:'0.8em'}}
+                    >← Назад к аналитике</button>
+                  )}
                   <button
                     onClick={() => setC2TreeOpen(v => !v)}
                     title={c2TreeOpen ? 'Скрыть дерево' : 'Показать дерево'}
@@ -2918,6 +3006,7 @@ export function App() {
                       flexShrink: 0,
                     }}
                   >{c2TreeOpen ? '◀ Дерево' : '▶ Дерево'}</button>
+                  </div>
                   <div style={{display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center', fontSize: '0.78em', color: '#475569', maxWidth: '60%'}}>
                     <span
                       style={{cursor: 'pointer', color: c2Path === '' ? '#f1f5f9' : '#3b82f6', fontWeight: c2Path === '' ? 700 : 400}}
@@ -3098,7 +3187,7 @@ export function App() {
 
         {/* ── ANALYTICS TAB ─────────────────────────────────────────────── */}
         {tab === 'analytics' && (
-          <AnalyticsPage onOpenCatalog={path => { setC2Path(path || ''); setTab('catalog2'); navigateToTab('catalog2'); }}/>
+          <AnalyticsPage initialPath={analyticsReturnPath} onOpenCatalog={(path, analyticsPath) => { setAnalyticsReturnPath(analyticsPath || path || ''); setC2Path(path || ''); setTab('catalog2'); navigateToTab('catalog2'); }}/>
         )}
 
       </main>
