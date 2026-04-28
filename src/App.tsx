@@ -75,6 +75,27 @@ type Catalog2Item = {
   forecast_mode: string|null; w_forecast_final: number|null;
 };
 type C2GroupResult = {name: string; depth: number; item_count: number; path: string};
+type C2Receipt = {
+  receipt_date: string;
+  receipt_number: string|null;
+  supplier_name: string|null;
+  article: string|null;
+  receipt_qty: number;
+  price: number|null;
+  sum: number|null;
+};
+
+type C2ReceiptsData = {
+  rows: C2Receipt[];
+  summary: {
+    receipts_count: number;
+    total_qty: number;
+    avg_price: number|null;
+    last_receipt_date: string|null;
+    last_price: number|null;
+  } | null;
+};
+
 type C2Forecast = {
   item_code: string; calc_date: string;
   avg_day_365: number; avg_day_30: number; std_day_no_anom: number; observed_days_365: number;
@@ -583,13 +604,14 @@ const DEMAND_MODE_LABELS: Record<string, {label: string; color: string}> = {
 function ProductDetailModal2({
   item, onClose, salesData, salesLoading, chartFrom, chartTo, chartGran,
   setChartFrom, setChartTo, setChartGran,
-  forecastData, forecastLoading,
+  forecastData, forecastLoading, receiptsData, receiptsLoading,
 }: {
   item: Catalog2Item; onClose: () => void;
   salesData: C2SalesData | null; salesLoading: boolean;
   chartFrom: string; chartTo: string; chartGran: C2Gran;
   setChartFrom: (v: string) => void; setChartTo: (v: string) => void; setChartGran: (v: C2Gran) => void;
   forecastData: C2Forecast | null; forecastLoading: boolean;
+  receiptsData: C2ReceiptsData | null; receiptsLoading: boolean;
 }) {
   const [forecastDays, setForecastDays] = useState(forecastData?.order_cycle_days ?? 14);
   useEffect(() => {
@@ -610,6 +632,8 @@ function ProductDetailModal2({
 
   const totalSales = (salesData?.series || []).reduce((a, s) => a + s.sales, 0);
   const totalReturns = (salesData?.series || []).reduce((a, s) => a + s.returns, 0);
+  const receiptRows = receiptsData?.rows || [];
+  const receiptSummary = receiptsData?.summary || null;
   const periodCount = salesData?.series?.length || 0;
   const avgSalesPerPeriod = periodCount > 0 ? totalSales / periodCount : 0;
   const peakSalesPoint = salesData?.series?.length
@@ -755,6 +779,47 @@ function ProductDetailModal2({
                 ? 'Спрос умеренно прерывистый: продажи есть регулярно, но заметная часть периодов остаётся пустой.'
                 : 'Спрос достаточно ровный: продажи присутствуют в большинстве периодов, график можно читать как стабильный паттерн.'
               : 'По выбранному диапазону пока нет данных для интерпретации.'}
+          </div>
+
+          <div style={{marginTop: 16, background: '#111827', border: '1px solid #1f2937', borderRadius: 12, padding: '14px 16px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:10,flexWrap:'wrap'}}>
+              <div style={{fontWeight:700,color:'#f8fafc'}}>Последние поступления</div>
+              {receiptSummary && (
+                <div style={{display:'flex',gap:12,flexWrap:'wrap',fontSize:'0.85em',color:'#94a3b8'}}>
+                  <span>Приходов: <span style={{color:'#e2e8f0',fontWeight:700}}>{receiptSummary.receipts_count ?? 0}</span></span>
+                  <span>Всего: <span style={{color:'#e2e8f0',fontWeight:700}}>{Number(receiptSummary.total_qty || 0).toLocaleString('ru-RU')} шт.</span></span>
+                  {receiptSummary.last_price != null && <span>Последняя цена: <span style={{color:'#e2e8f0',fontWeight:700}}>{Number(receiptSummary.last_price).toLocaleString('ru-RU')} ₽</span></span>}
+                </div>
+              )}
+            </div>
+            {receiptsLoading ? (
+              <div style={{color:'#475569',fontSize:'0.88em',padding:'10px 0'}}>Загрузка поступлений…</div>
+            ) : receiptRows.length ? (
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                {receiptRows.slice(0,8).map((r, idx) => (
+                  <div key={`${r.receipt_number || 'r'}-${r.receipt_date}-${idx}`} style={{display:'grid',gridTemplateColumns:'150px 100px 110px 1fr',gap:10,alignItems:'center',background:'#0f172a',borderRadius:10,padding:'10px 12px'}}>
+                    <div>
+                      <div style={{fontSize:'0.74em',color:'#64748b'}}>Дата</div>
+                      <div style={{color:'#e2e8f0',fontWeight:700,fontSize:'0.92em'}}>{r.receipt_date || '—'}</div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:'0.74em',color:'#64748b'}}>Кол-во</div>
+                      <div style={{color:'#22c55e',fontWeight:800,fontSize:'1em'}}>{Number(r.receipt_qty || 0).toLocaleString('ru-RU')} шт.</div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:'0.74em',color:'#64748b'}}>Цена</div>
+                      <div style={{color:'#f8fafc',fontWeight:700,fontSize:'0.95em'}}>{r.price != null ? `${Number(r.price).toLocaleString('ru-RU')} ₽` : '—'}</div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:'0.74em',color:'#64748b'}}>Поставщик</div>
+                      <div style={{color:'#cbd5e1',fontWeight:600,fontSize:'0.9em',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}} title={r.supplier_name || ''}>{r.supplier_name || '—'}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{color:'#475569',fontSize:'0.88em',padding:'10px 0'}}>Для этого товара поступления пока не найдены</div>
+            )}
           </div>
         </div>
           </div>{/* /chart column */}
@@ -2039,6 +2104,8 @@ export function App() {
   const [c2OrderName, setC2OrderName] = useState('');
   const [c2Forecast, setC2Forecast] = useState<C2Forecast | null>(null);
   const [c2ForecastLoading, setC2ForecastLoading] = useState(false);
+  const [c2Receipts, setC2Receipts] = useState<C2ReceiptsData | null>(null);
+  const [c2ReceiptsLoading, setC2ReceiptsLoading] = useState(false);
 
   // ── api helpers ─────────────────────────────────────────────────────────────
 
@@ -2132,11 +2199,22 @@ export function App() {
   async function c2LoadForecast(code: string) {
     if (!code) return;
     setC2ForecastLoading(true);
+    setC2ReceiptsLoading(true);
     try {
-      const data = await fetchJSON<C2Forecast>(apiUrl(`/api/catalog2/item/${encodeURIComponent(code)}/forecast`));
-      setC2Forecast(data);
-    } catch { setC2Forecast(null); }
-    finally { setC2ForecastLoading(false); }
+      const [forecastData, receiptsData] = await Promise.all([
+        fetchJSON<C2Forecast>(apiUrl(`/api/catalog2/item/${encodeURIComponent(code)}/forecast`)),
+        fetchJSON<C2ReceiptsData>(apiUrl(`/api/catalog2/item/${encodeURIComponent(code)}/receipts?limit=12`)),
+      ]);
+      setC2Forecast(forecastData);
+      setC2Receipts(receiptsData);
+    } catch {
+      setC2Forecast(null);
+      setC2Receipts(null);
+    }
+    finally {
+      setC2ForecastLoading(false);
+      setC2ReceiptsLoading(false);
+    }
   }
 
   async function c2SearchGroups(q: string) {
@@ -2374,7 +2452,7 @@ export function App() {
   }, [c2Items]);
 
   useEffect(() => {
-    if (!c2Modal) { setC2Forecast(null); return; }
+    if (!c2Modal) { setC2Forecast(null); setC2Receipts(null); return; }
     const code = c2Modal.item_code?.trim() || String(c2Modal.id);
     c2LoadForecast(code);
   }, [c2Modal]);
@@ -2650,6 +2728,8 @@ export function App() {
           setChartGran={setC2ChartGran}
           forecastData={c2Forecast}
           forecastLoading={c2ForecastLoading}
+          receiptsData={c2Receipts}
+          receiptsLoading={c2ReceiptsLoading}
         />
       )}
       {explainRow && <ExplainModal row={explainRow} onClose={() => setExplainRow(null)} />}

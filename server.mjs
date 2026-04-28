@@ -30,6 +30,45 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 
+app.get('/api/catalog2/item/:code/receipts', (req, res) => {
+  const code = String(req.params.code || '').trim();
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit || 20)));
+  if (!code) return res.json({rows: [], summary: null});
+  try {
+    const rows = db.prepare(`
+      SELECT
+        receipt_date,
+        receipt_number,
+        supplier_name,
+        article,
+        qty AS receipt_qty,
+        price,
+        amount AS sum
+      FROM catalog_receipts
+      WHERE TRIM(item_code) = TRIM(?)
+      ORDER BY date(receipt_date) DESC, id DESC
+      LIMIT ?
+    `).all(code, limit);
+
+    const summary = db.prepare(`
+      SELECT
+        COUNT(*) AS receipts_count,
+        ROUND(SUM(COALESCE(qty, 0)), 2) AS total_qty,
+        ROUND(AVG(NULLIF(price, 0)), 2) AS avg_price,
+        MAX(date(receipt_date)) AS last_receipt_date,
+        MAX(CASE WHEN date(receipt_date) = (
+          SELECT MAX(date(receipt_date)) FROM catalog_receipts WHERE TRIM(item_code) = TRIM(?)
+        ) THEN price END) AS last_price
+      FROM catalog_receipts
+      WHERE TRIM(item_code) = TRIM(?)
+    `).get(code, code);
+
+    res.json({rows, summary});
+  } catch (e) {
+    res.status(500).json({error: String(e?.message || e)});
+  }
+});
+
 try {
   db.exec(`
     ALTER TABLE purchase_order_batches ADD COLUMN draft_mode TEXT;
