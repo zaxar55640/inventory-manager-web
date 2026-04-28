@@ -2644,6 +2644,26 @@ export function App() {
     setSidebarOpen(v => !v);
   }
 
+  async function copyText(value?: string | null) {
+    const text = String(value || '').trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch {}
+    }
+  }
+
   useEffect(() => {
     const media = window.matchMedia('(min-width: 981px)');
     const syncSidebar = () => {
@@ -3703,6 +3723,7 @@ export function App() {
                       <th style={{padding: '7px 6px 7px 10px', width: 28, borderBottom: '1px solid #1e293b'}}/>
                       {([
                         {label: 'Название', key: 'item_name', right: false},
+                        {label: 'Артикул', key: null, right: false},
                         {label: 'Подгруппа', key: 'parent_name', right: false},
                         {label: 'ABC·XYZ', key: 'abc_class', right: true},
                         {label: 'Остаток', key: 'qty', right: true},
@@ -3793,6 +3814,18 @@ export function App() {
                           <td style={{padding: '7px 10px', maxWidth: 300, color: '#e2e8f0'}}>
                             <div style={{fontWeight: 500, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.item_name}</div>
                             {item.article && <div style={{color:'#475569',fontSize:'0.75em',fontFamily:'monospace',marginTop:1}}>арт. {item.article}</div>}
+                          </td>
+                          <td style={{padding: '7px 10px', color: '#cbd5e1', whiteSpace: 'nowrap'}}>
+                            <div style={{display:'flex',alignItems:'center',gap:6,justifyContent:'flex-start'}}>
+                              <span style={{fontFamily:'monospace',fontSize:'0.85em'}}>{item.article || '—'}</span>
+                              {item.article && (
+                                <button
+                                  onClick={e => { e.stopPropagation(); copyText(item.article); }}
+                                  title="Скопировать артикул"
+                                  style={{background:'none',border:'1px solid #334155',borderRadius:5,color:'#94a3b8',cursor:'pointer',padding:'1px 6px',fontSize:'0.72em'}}
+                                >⧉</button>
+                              )}
+                            </div>
                           </td>
                           <td style={{padding: '7px 10px', color: '#64748b', whiteSpace: 'nowrap', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis'}}>
                             {item.parent_name || '—'}
@@ -3917,6 +3950,8 @@ export function App() {
                   <thead>
                     <tr style={{background:'#0a1628',position:'sticky',top:0,zIndex:3}}>
                       <th style={{padding:'6px 12px',textAlign:'left',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b'}}>Товар</th>
+                      <th style={{padding:'6px 10px',textAlign:'left',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b',whiteSpace:'nowrap'}}>Артикул</th>
+                      <th style={{padding:'6px 10px',textAlign:'left',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b',whiteSpace:'nowrap'}}>Поставщик</th>
                       <th style={{padding:'6px 10px',textAlign:'right',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b',whiteSpace:'nowrap'}}>Рек.</th>
                       <th style={{padding:'6px 10px',textAlign:'right',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b',whiteSpace:'nowrap'}}>Кол-во</th>
                       <th style={{padding:'6px 12px',textAlign:'left',color:'#475569',fontWeight:600,borderBottom:'1px solid #1e293b'}}>Причина отклонения</th>
@@ -3942,6 +3977,30 @@ export function App() {
                             {(entry.item.abc_class || entry.item.xyz_class) && (
                               <ClassBadge abc={entry.item.abc_class||''} xyz={entry.item.xyz_class||''}/>
                             )}
+                          </td>
+                          <td style={{padding:'8px 10px',color:'#cbd5e1'}}>
+                            <div style={{display:'flex',alignItems:'center',gap:6}}>
+                              <span style={{fontFamily:'monospace',fontSize:'0.84em'}}>{entry.item.article || '—'}</span>
+                              {entry.item.article && (
+                                <button
+                                  onClick={() => copyText(entry.item.article)}
+                                  title="Скопировать артикул"
+                                  style={{background:'none',border:'1px solid #334155',borderRadius:5,color:'#94a3b8',cursor:'pointer',padding:'1px 6px',fontSize:'0.72em'}}
+                                >⧉</button>
+                              )}
+                            </div>
+                          </td>
+                          <td style={{padding:'8px 10px',color:'#94a3b8'}}>
+                            <div style={{display:'flex',alignItems:'center',gap:6}}>
+                              <span style={{maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={entry.item.supplier_name || ''}>{entry.item.supplier_name || '—'}</span>
+                              {entry.item.supplier_name && (
+                                <button
+                                  onClick={() => copyText(entry.item.supplier_name)}
+                                  title="Скопировать поставщика"
+                                  style={{background:'none',border:'1px solid #334155',borderRadius:5,color:'#94a3b8',cursor:'pointer',padding:'1px 6px',fontSize:'0.72em'}}
+                                >⧉</button>
+                              )}
+                            </div>
                           </td>
                           <td style={{padding:'8px 10px',textAlign:'right',color:'#64748b',fontWeight:600}}>
                             {entry.recommendedOrder > 0 ? entry.recommendedOrder : '—'}
