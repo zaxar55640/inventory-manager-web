@@ -1592,6 +1592,22 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
     if (!treeCache.has(p)) await loadTreeChildren(p);
   }, [treeCache, loadTreeChildren]);
 
+  async function ensureAnalyticsTreePath(targetPath: string) {
+    const parts = targetPath.split(' / ').filter(Boolean);
+    let current = '';
+    for (let i = 0; i < parts.length; i++) {
+      const next = current ? `${current} / ${parts[i]}` : parts[i];
+      if (!treeCache.has(current)) await loadTreeChildren(current);
+      if (i < parts.length - 1) {
+        if (!treeExpanded.has(next)) {
+          setTreeExpanded(prev => new Set(prev).add(next));
+        }
+        if (!treeCache.has(next)) await loadTreeChildren(next);
+      }
+      current = next;
+    }
+  }
+
   const treeNodes = useMemo(() => {
     type VN = {path:string;name:string;depth:number;hasChildren:boolean;isExpanded:boolean;itemCount:number};
     const result: VN[] = [];
@@ -1768,7 +1784,7 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
             treeSearchRes.length===0
               ? <div style={{padding:'16px 8px',color:'#334155',fontSize:'0.78em',textAlign:'center'}}>Не найдено</div>
               : treeSearchRes.map((r,idx) => (
-                  <div key={idx} onClick={() => {setPath(r.path);setTreeSearch('');}}
+                  <div key={idx} onClick={async () => {setPath(r.path);setTreeSearch(''); await ensureAnalyticsTreePath(r.path);}}
                     style={{padding:'5px 8px',borderRadius:5,cursor:'pointer',marginBottom:1,
                       background:path===r.path?'#1d4ed8':'transparent',fontSize:'0.75em'}}>
                     <div style={{color:path===r.path?'#fff':'#e2e8f0',fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}
@@ -2249,6 +2265,20 @@ export function App() {
       if (!c2TreeCache.has(path)) await c2LoadChildren(path);
     }
     setC2Expanded(next);
+  }
+
+  async function ensureCatalogTreePath(targetPath: string) {
+    const parts = targetPath.split(' / ').filter(Boolean);
+    let current = '';
+    for (let i = 0; i < parts.length; i++) {
+      const next = current ? `${current} / ${parts[i]}` : parts[i];
+      if (!c2TreeCache.has(current)) await c2LoadChildren(current);
+      if (i < parts.length - 1) {
+        setC2Expanded(prev => new Set(prev).add(next));
+        if (!c2TreeCache.has(next)) await c2LoadChildren(next);
+      }
+      current = next;
+    }
   }
 
   async function loadNonLiquidGroups() {
@@ -3532,7 +3562,7 @@ export function App() {
                     ? <div style={{padding: '16px 8px', color: '#334155', fontSize: '0.8em', textAlign: 'center'}}>Не найдено</div>
                     : c2TreeSearchResults.map((r, idx) => (
                         <div key={idx}
-                          onClick={() => { setC2Path(r.path); setC2TreeSearch(''); }}
+                          onClick={async () => { setC2Path(r.path); setC2TreeSearch(''); await ensureCatalogTreePath(r.path); }}
                           style={{padding: '5px 8px', borderRadius: 5, cursor: 'pointer', marginBottom: 1, background: c2Path === r.path ? '#1d4ed8' : 'transparent', fontSize: '0.78em'}}
                         >
                           <div style={{color: c2Path === r.path ? '#fff' : '#e2e8f0', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={r.path}>
@@ -3579,10 +3609,12 @@ export function App() {
                       }}
                       onClick={() => {
                         setC2Path(node.path);
-                        if (node.hasChildren) c2ToggleExpand(node.path);
                       }}
                     >
-                      <span style={{width: 12, color: '#334155', fontSize: '0.85em', flexShrink: 0}}>
+                      <span
+                        style={{width: 12, color: node.hasChildren ? '#94a3b8' : '#334155', fontSize: '0.85em', flexShrink: 0, cursor: node.hasChildren ? 'pointer' : 'default'}}
+                        onClick={node.hasChildren ? (e => { e.stopPropagation(); c2ToggleExpand(node.path); }) : undefined}
+                      >
                         {node.hasChildren ? (node.isExpanded ? '▾' : '▸') : '·'}
                       </span>
                       <span style={{flex: 1, color: isActive ? '#fff' : isAncestor ? '#93c5fd' : '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: isAncestor ? 600 : 400}} title={node.name}>
