@@ -3551,14 +3551,23 @@ export function App() {
                     value={c2Search}
                     onChange={e => setC2Search(e.target.value)}
                   />
-                  <select
-                    value={c2Supplier}
-                    onChange={e => { setC2Supplier(e.target.value); setC2Offset(0); }}
-                    style={{background:'#1e293b',border:'1px solid #334155',borderRadius:6,color:c2Supplier?'#f1f5f9':'#64748b',padding:'5px 8px',fontSize:'0.82em',flexShrink:0,maxWidth:180}}
-                  >
-                    <option value="">Все поставщики</option>
-                    {c2Suppliers.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                  <div style={{position:'relative',display:'flex',alignItems:'center',flexShrink:0}}>
+                    <select
+                      value={c2Supplier}
+                      onChange={e => { setC2Supplier(e.target.value); setC2Offset(0); }}
+                      style={{background:'#1e293b',border:'1px solid #334155',borderRadius:6,color:c2Supplier?'#f1f5f9':'#64748b',padding:'5px 8px',paddingRight:c2Supplier?'26px':'8px',fontSize:'0.82em',maxWidth:180,appearance:'none'}}
+                    >
+                      <option value="">Все поставщики</option>
+                      {c2Suppliers.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    {c2Supplier && (
+                      <button
+                        onClick={() => { setC2Supplier(''); setC2Offset(0); }}
+                        style={{position:'absolute',right:4,background:'none',border:'none',cursor:'pointer',color:'#94a3b8',fontSize:'1em',lineHeight:1,padding:'0 2px'}}
+                        title="Сбросить фильтр"
+                      >×</button>
+                    )}
+                  </div>
                   <label style={{display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, cursor: 'pointer', userSelect: 'none'}}>
                     <input
                       type="checkbox"
@@ -3618,7 +3627,7 @@ export function App() {
                         {label: 'Подгруппа', key: 'parent_name', right: false},
                         {label: 'ABC·XYZ', key: 'abc_class', right: true},
                         {label: 'Остаток', key: 'qty', right: true},
-                        {label: 'Дельта', key: null, right: true},
+                        {label: 'Дельта', key: 'delta', right: true},
                         {label: 'Нужно остатков', key: 'recommended_stock', right: true},
                         {label: 'Нужно заказать', key: 'to_order', right: true},
                         {label: 'Цена прод.', key: 'retail_price', right: true},
@@ -3654,15 +3663,19 @@ export function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(c2SortBy === 'recommended_stock' || c2SortBy === 'to_order' ? [...c2Items].sort((a, b) => {
+                    {(c2SortBy === 'recommended_stock' || c2SortBy === 'to_order' || c2SortBy === 'delta' ? [...c2Items].sort((a, b) => {
                       const fa = c2ForecastMap[String(a.id)];
                       const fb = c2ForecastMap[String(b.id)];
                       const recA = fa ? Math.max(0, Math.ceil((fa.forecast_day_matrix || 0) * ((fa.lead_time_days || 0) + (fa.order_cycle_days || 0)) + (fa.ss_total || 0))) : (a.recommended_stock ?? 0);
                       const recB = fb ? Math.max(0, Math.ceil((fb.forecast_day_matrix || 0) * ((fb.lead_time_days || 0) + (fb.order_cycle_days || 0)) + (fb.ss_total || 0))) : (b.recommended_stock ?? 0);
                       const ordA = fa ? Math.max(0, Math.ceil(recA - (a.qty || 0))) : Math.max(0, a.to_order ?? a.forecast_to_order ?? 0);
                       const ordB = fb ? Math.max(0, Math.ceil(recB - (b.qty || 0))) : Math.max(0, b.to_order ?? b.forecast_to_order ?? 0);
+                      const deltaA = recA ? Math.round(recA) - (a.qty || 0) : 0;
+                      const deltaB = recB ? Math.round(recB) - (b.qty || 0) : 0;
                       const dir = c2SortDir === 'asc' ? 1 : -1;
-                      return (c2SortBy === 'recommended_stock' ? (recA - recB) : (ordA - ordB)) * dir;
+                      if (c2SortBy === 'recommended_stock') return (recA - recB) * dir;
+                      if (c2SortBy === 'delta') return (deltaA - deltaB) * dir;
+                      return (ordA - ordB) * dir;
                     }) : c2Items).map(item => {
                       const forecast = c2ForecastMap[String(item.id)];
                       const recommendedStock = forecast
