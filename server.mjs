@@ -443,7 +443,9 @@ app.get('/api/orders/:id', (req, res) => {
   const items = db.prepare(`
     SELECT i.id, i.sku_name, i.item_ref, i.recommended_qty, i.manager_qty, i.final_qty, i.reason, i.item_status,
            COALESCE(r.supplier_name,
-             (SELECT pr.supplier_name FROM purchase_recommendations pr WHERE pr.item_ref = i.item_ref LIMIT 1)
+             (SELECT pr.supplier_name FROM purchase_recommendations pr
+              JOIN catalog_products cp ON cp.item_name = pr.item_ref
+              WHERE cp.item_code = i.item_ref LIMIT 1)
            ) AS supplier_name
     FROM purchase_order_items i
     LEFT JOIN purchase_recommendations r ON r.id = i.recommendation_id
