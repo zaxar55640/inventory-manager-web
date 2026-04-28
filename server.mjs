@@ -13,6 +13,8 @@ try {
     CREATE INDEX IF NOT EXISTS idx_cp_item_code ON catalog_products(item_code);
   `);
 } catch (_e) { /* tables may not exist yet */ }
+try { db.prepare('ALTER TABLE catalog_products ADD COLUMN article TEXT').run(); } catch (_e) {}
+try { db.prepare('ALTER TABLE catalog_products ADD COLUMN supplier_name TEXT').run(); } catch (_e) {}
 
 // Register JS toLowerCase so SQLite can do case-insensitive Cyrillic search
 db.function('jslower', (s) => (s == null ? null : String(s).toLowerCase()));
@@ -446,7 +448,8 @@ app.get('/api/orders/:id', (req, res) => {
              (SELECT pr.supplier_name FROM purchase_recommendations pr
               JOIN catalog_products cp ON cp.item_name = pr.item_ref
               WHERE cp.item_code = i.item_ref LIMIT 1)
-           ) AS supplier_name
+           ) AS supplier_name,
+           (SELECT cp2.article FROM catalog_products cp2 WHERE cp2.item_code = i.item_ref LIMIT 1) AS article
     FROM purchase_order_items i
     LEFT JOIN purchase_recommendations r ON r.id = i.recommendation_id
     WHERE i.batch_id = ? ORDER BY i.id DESC
@@ -669,7 +672,7 @@ app.get('/api/catalog2/items', (req, res) => {
 
     const total = db.prepare(`SELECT COUNT(*) AS cnt FROM catalog_products cp ${where}`).get(...params).cnt;
     const items = db.prepare(`
-      SELECT cp.id, cp.item_code, cp.item_name, cp.barcode, cp.qty, cp.reserve,
+      SELECT cp.id, cp.item_code, cp.item_name, cp.barcode, cp.article, cp.qty, cp.reserve,
              cp.retail_price, cp.purchase_price, cp.parent_name, cp.variant,
              cp.group_l0, cp.group_l1, cp.group_l2, cp.group_l3, cp.group_l4,
              cp.group_l5, cp.group_l6, cp.group_l7, cp.group_l8,
@@ -677,7 +680,8 @@ app.get('/api/catalog2/items', (req, res) => {
              ls.last_sale_date,
              CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) AS days_since_last_sale,
              cf.abc_class, cf.xyz_class, cf.forecast_day_matrix, cf.to_order AS forecast_to_order,
-             cf.demand_mode AS forecast_mode, cf.w_forecast_final
+             cf.demand_mode AS forecast_mode, cf.w_forecast_final,
+             (SELECT pr.supplier_name FROM purchase_recommendations pr WHERE pr.item_ref = cp.item_name LIMIT 1) AS supplier_name
       FROM catalog_products cp
       LEFT JOIN (
         SELECT item_code, MAX(sale_date) AS last_sale_date

@@ -44,7 +44,7 @@ type DraftSummary = {id: number; supplier_name: string; status: string; created_
 type OrderBatch = {id: number; batch_name: string; supplier_name: string; status: string; created_at: string; items_count: number; total_qty: number};
 type DraftItem = {id: number; recommendation_id: number; item_ref: string; sku_name: string; norm_name: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string};
 type DraftDetail = {batch: DraftSummary; items: DraftItem[]};
-type OrderDetail = {batch: {id: number; batch_name: string; supplier_name: string; status: string; created_at: string}; items: Array<{id: number; sku_name: string; item_ref: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string; item_status: string; supplier_name?: string}>};
+type OrderDetail = {batch: {id: number; batch_name: string; supplier_name: string; status: string; created_at: string}; items: Array<{id: number; sku_name: string; item_ref: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string; item_status: string; supplier_name?: string; article?: string}>};
 type NonLiquidItem = {store: string; store_ref: string; item_ref: string; sku_name: string; norm_name: string; subgroup: string; available_qty: number; sales_qty_4m: number; last_sale_date: string | null; days_since_last_sale: number | null; is_seasonal: number; season_note: string | null; nlq_score: number | null};
 type NonLiquidResponse = {items: NonLiquidItem[]; total: number; limit: number; offset: number; has_more: boolean};
 type Dashboard = {total_to_order: number; urgent_count: number; pre_season_count: number; overstock_count: number; new_items_count: number};
@@ -62,9 +62,9 @@ type CatalogItem = {
 type CatalogResponse = {items: CatalogItem[]; total: number; limit: number; offset: number; has_more: boolean};
 
 type Catalog2Item = {
-  id: number; item_code: string|null; item_name: string; barcode: string|null;
+  id: number; item_code: string|null; item_name: string; barcode: string|null; article: string|null;
   qty: number; reserve: number; retail_price: number; purchase_price: number;
-  parent_name: string|null; variant: string|null;
+  parent_name: string|null; variant: string|null; supplier_name: string|null;
   group_l0: string|null; group_l1: string|null; group_l2: string|null;
   group_l3: string|null; group_l4: string|null; group_l5: string|null;
   group_l6: string|null; group_l7: string|null; group_l8: string|null;
@@ -3116,7 +3116,7 @@ export function App() {
                             <tr key={item.id} style={{background: changed ? '#1e3a2b' : undefined}}>
                               <td>
                                 <div style={{fontWeight:500,fontSize:'0.85rem'}}>{item.sku_name}</div>
-                                <div className="meta">{item.item_ref}</div>
+                                {item.article && <div className="meta" style={{fontFamily:'monospace'}}>арт. {item.article}</div>}
                               </td>
                               <td style={{color:'#64748b',fontSize:'0.8rem',whiteSpace:'nowrap',maxWidth:140,overflow:'hidden',textOverflow:'ellipsis'}}>
                                 {item.supplier_name || '—'}
@@ -3623,7 +3623,6 @@ export function App() {
                       <th style={{padding: '7px 6px 7px 10px', width: 28, borderBottom: '1px solid #1e293b'}}/>
                       {([
                         {label: 'Название', key: 'item_name', right: false},
-                        {label: 'Код / ШК', key: null, right: false},
                         {label: 'Подгруппа', key: 'parent_name', right: false},
                         {label: 'ABC·XYZ', key: 'abc_class', right: true},
                         {label: 'Остаток', key: 'qty', right: true},
@@ -3713,10 +3712,7 @@ export function App() {
                           </td>
                           <td style={{padding: '7px 10px', maxWidth: 300, color: '#e2e8f0'}}>
                             <div style={{fontWeight: 500, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{item.item_name}</div>
-                          </td>
-                          <td style={{padding: '7px 10px', fontFamily: 'monospace', color: '#475569', fontSize: '0.85em', whiteSpace: 'nowrap'}}>
-                            {item.item_code?.trim() && <div>{item.item_code.trim()}</div>}
-                            {item.barcode && <div style={{color: '#334155'}}>{item.barcode}</div>}
+                            {item.article && <div style={{color:'#475569',fontSize:'0.75em',fontFamily:'monospace',marginTop:1}}>арт. {item.article}</div>}
                           </td>
                           <td style={{padding: '7px 10px', color: '#64748b', whiteSpace: 'nowrap', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis'}}>
                             {item.parent_name || '—'}
@@ -3861,9 +3857,8 @@ export function App() {
                               onClick={() => setC2Modal(entry.item)}>
                               {entry.item.item_name}
                             </div>
-                            {entry.item.item_code?.trim() && (
-                              <div style={{color:'#334155',fontSize:'0.75em',fontFamily:'monospace'}}>{entry.item.item_code.trim()}</div>
-                            )}
+                            {entry.item.article && <div style={{color:'#475569',fontSize:'0.75em',fontFamily:'monospace',marginTop:1}}>арт. {entry.item.article}</div>}
+                            {entry.item.supplier_name && <div style={{color:'#64748b',fontSize:'0.75em',marginTop:1}}>{entry.item.supplier_name}</div>}
                             {(entry.item.abc_class || entry.item.xyz_class) && (
                               <ClassBadge abc={entry.item.abc_class||''} xyz={entry.item.xyz_class||''}/>
                             )}
