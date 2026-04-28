@@ -963,72 +963,104 @@ app.get('/api/catalog2/item/:code/sales', (req, res) => {
     const to   = String(req.query.to   || new Date().toISOString().slice(0, 10)).slice(0, 10);
     const gran = String(req.query.gran || 'month');
 
-    const groupExpr =
-      gran === 'day'  ? `strftime('%Y-%m-%d', sale_date)` :
-      gran === 'week' ? `strftime('%Y-W%W',   sale_date)` :
-                        `strftime('%Y-%m',    sale_date)`;
-
-    const rows = db.prepare(`
-      SELECT ${groupExpr} AS period,
-             SUM(sales_qty)  AS sales,
-             SUM(return_qty) AS returns
-      FROM catalog_sales
-      WHERE item_code = ? AND sale_date >= ? AND sale_date <= ?
-      GROUP BY period
-      ORDER BY period ASC
-    `).all(code, from, to);
-
-    if (!rows.length) return res.json({ series: [], has_data: false, gran });
-
-    // Fill gaps so the chart shows the full timeline with zeros
-    const salesMap = new Map(rows.map(r => [r.period, r]));
-
     function parseLocal(s) {
       const [y, m, d] = s.split('-').map(Number);
       return new Date(y, m - 1, d);
     }
-
-    // Matches SQLite strftime('%W'): week 01 starts on the first Monday of the year
+    function fmtDay(d) {
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
     function sqliteWeek(d) {
       const year = d.getFullYear();
       const jan1 = new Date(year, 0, 1);
       const doy = Math.floor((d - jan1) / 86400000);
-      const jan1Day = jan1.getDay(); // 0=Sun
+      const jan1Day = jan1.getDay();
       const toFirstMon = jan1Day === 1 ? 0 : jan1Day === 0 ? 1 : 8 - jan1Day;
       if (doy < toFirstMon) return `${year}-W00`;
       return `${year}-W${String(Math.floor((doy - toFirstMon) / 7) + 1).padStart(2, '0')}`;
     }
+    function periodKey(d) {
+      if (gran === 'day') return fmtDay(d);
+      if (gran === 'week') return sqliteWeek(d);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}`;
+    }
+
+    const salesRows = db.prepare(`
+      SELECT sale_date AS day,
+             SUM(COALESCE(sales_qty,0))  AS sales,
+             SUM(COALESCE(return_qty,0)) AS returns
+      FROM catalog_sales
+      WHERE item_code = ? AND sale_date >= ? AND sale_date <= ?
+      GROUP BY sale_date
+      ORDER BY sale_date ASC
+    `).all(code, from, to);
+
+    const receiptRows = db.prepare(`
+      SELECT receipt_date AS day,
+             SUM(COALESCE(qty,0)) AS receipts
+      FROM catalog_receipts
+      WHERE TRIM(item_code) = TRIM(?) AND receipt_date >= ? AND receipt_date <= ?
+      GROUP BY receipt_date
+      ORDER BY receipt_date ASC
+    `).all(code, from, to);
+
+    const currentStockRow = db.prepare(`
+      SELECT COALESCE(qty, 0) AS qty
+      FROM catalog_products
+      WHERE TRIM(item_code) = TRIM(?)
+      LIMIT 1
+    `).get(code);
+    const currentStock = Number(currentStockRow?.qty || 0);
+
+    const salesByDay = new Map(salesRows.map(r => [String(r.day).slice(0,10), {sales: Number(r.sales || 0), returns: Number(r.returns || 0)}]));
+    const receiptsByDay = new Map(receiptRows.map(r => [String(r.day).slice(0,10), Number(r.receipts || 0)]));
 
     const fromDate = parseLocal(from);
     const toDate   = parseLocal(to);
-    const filled   = [];
-    const zero = { sales: 0, returns: 0 };
-
-    if (gran === 'day') {
-      for (let d = new Date(fromDate); d <= toDate; d.setDate(d.getDate() + 1)) {
-        const period = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-        filled.push(salesMap.get(period) ?? { period, ...zero });
-      }
-    } else if (gran === 'week') {
-      const seen = new Set();
-      for (let d = new Date(fromDate); d <= toDate; d.setDate(d.getDate() + 1)) {
-        const period = sqliteWeek(d);
-        if (!seen.has(period)) {
-          seen.add(period);
-          filled.push(salesMap.get(period) ?? { period, ...zero });
-        }
-      }
-    } else {
-      let y = fromDate.getFullYear(), m = fromDate.getMonth() + 1;
-      const toY = toDate.getFullYear(), toM = toDate.getMonth() + 1;
-      while (y < toY || (y === toY && m <= toM)) {
-        const period = `${y}-${String(m).padStart(2, '0')}`;
-        filled.push(salesMap.get(period) ?? { period, ...zero });
-        if (++m > 12) { m = 1; y++; }
-      }
+    const days = [];
+    for (let d = new Date(fromDate); d <= toDate; d.setDate(d.getDate() + 1)) {
+      const day = fmtDay(d);
+      const sr = salesByDay.get(day) || {sales: 0, returns: 0};
+      const receipts = receiptsByDay.get(day) || 0;
+      days.push({day, sales: sr.sales, returns: sr.returns, receipts});
     }
 
-    res.json({ series: filled, has_data: true, gran });
+    let stockCursor = currentStock;
+    const estimatedByDay = new Map();
+    for (let i = days.length - 1; i >= 0; i--) {
+      const row = days[i];
+      estimatedByDay.set(row.day, Math.max(0, stockCursor));
+      stockCursor = stockCursor - row.receipts + row.sales - row.returns;
+    }
+
+    const buckets = new Map();
+    for (const row of days) {
+      const d = parseLocal(row.day);
+      const period = periodKey(d);
+      const prev = buckets.get(period) || {period, sales: 0, returns: 0, receipts: 0, estimated_stock: null, stock_min: null, stock_max: null};
+      prev.sales += row.sales;
+      prev.returns += row.returns;
+      prev.receipts += row.receipts;
+      const est = Number(estimatedByDay.get(row.day) || 0);
+      prev.estimated_stock = est;
+      prev.stock_min = prev.stock_min == null ? est : Math.min(prev.stock_min, est);
+      prev.stock_max = prev.stock_max == null ? est : Math.max(prev.stock_max, est);
+      buckets.set(period, prev);
+    }
+
+    const filled = Array.from(buckets.values()).sort((a, b) => String(a.period).localeCompare(String(b.period)));
+    const hasData = filled.some(r => r.sales || r.returns || r.receipts || r.estimated_stock != null);
+
+    res.json({
+      series: filled,
+      has_data: hasData,
+      gran,
+      meta: {
+        current_stock: currentStock,
+        reconstructed: true,
+        has_receipts: receiptRows.length > 0,
+      },
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

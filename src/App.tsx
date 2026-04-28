@@ -119,8 +119,8 @@ type C2Forecast = {
 type C2TreeNode = {name: string; item_count: number};
 type C2TreeEntry = {children: C2TreeNode[]; directItems: number};
 type C2Gran = 'day' | 'week' | 'month';
-type C2SalesSeries = {period: string; sales: number; returns: number};
-type C2SalesData = {series: C2SalesSeries[]; has_data: boolean; gran: C2Gran};
+type C2SalesSeries = {period: string; sales: number; returns: number; receipts?: number; estimated_stock?: number | null; stock_min?: number | null; stock_max?: number | null};
+type C2SalesData = {series: C2SalesSeries[]; has_data: boolean; gran: C2Gran; meta?: {current_stock?: number; reconstructed?: boolean; has_receipts?: boolean}};
 type Catalog2Response = {items: Catalog2Item[]; total: number; limit: number; offset: number; has_more: boolean};
 
 
@@ -352,12 +352,13 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
 
   const maxSales = Math.max(...displayed.map(s => s.sales), 1);
   const maxRet   = Math.max(...displayed.map(s => s.returns), 0);
+  const maxStock = Math.max(...displayed.map(s => Number(s.estimated_stock || 0)), 0);
   const forecastPerPeriod = forecastDayMatrix != null
     ? gran === 'day' ? forecastDayMatrix
     : gran === 'week' ? forecastDayMatrix * 7
     : forecastDayMatrix * 30.4
     : null;
-  const maxY = Math.max(maxSales, maxRet, forecastPerPeriod ?? 0, 1);
+  const maxY = Math.max(maxSales, maxRet, maxStock, forecastPerPeriod ?? 0, 1);
 
   const xOf = (i: number) => PL + (n <= 1 ? pw / 2 : (i / (n - 1)) * pw);
   const yOf = (v: number) => PT + ph - Math.max(0, Math.min(1, v / maxY)) * ph;
@@ -404,6 +405,7 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
 
   const salesPts = displayed.map((s, i) => `${xOf(i).toFixed(1)},${yOf(s.sales).toFixed(1)}`).join(' ');
   const retPts   = displayed.map((s, i) => `${xOf(i).toFixed(1)},${yOf(s.returns).toFixed(1)}`).join(' ');
+  const stockPts = displayed.map((s, i) => `${xOf(i).toFixed(1)},${yOf(Number(s.estimated_stock || 0)).toFixed(1)}`).join(' ');
   const salesArea = [
     `M ${xOf(0).toFixed(1)},${(PT + ph).toFixed(1)}`,
     ...displayed.map((s, i) => `L ${xOf(i).toFixed(1)},${yOf(s.sales).toFixed(1)}`),
@@ -494,6 +496,12 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
         <polyline points={salesPts} fill="none" stroke="#3b82f6" strokeWidth={2}
           strokeLinejoin="round" strokeLinecap="round"/>
 
+        {/* Estimated stock line */}
+        {maxStock > 0 && (
+          <polyline points={stockPts} fill="none" stroke="#22c55e" strokeWidth={2}
+            strokeLinejoin="round" strokeLinecap="round" opacity={0.95}/>
+        )}
+
         {/* Dots */}
         {showDots && displayed.map((s, i) => (
           <g key={i}>
@@ -531,7 +539,7 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
             <line x1={hoverX} y1={PT} x2={hoverX} y2={PT + ph}
               stroke="#475569" strokeWidth={0.8} strokeDasharray="3 2"/>
             {(() => {
-              const tW = 148, tH = maxRet > 0 ? 62 : 46;
+              const tW = 160, tH = maxRet > 0 ? 76 : 60;
               const tX = tooltipLeft ? hoverX - tW - 8 : hoverX + 8;
               const tY = Math.max(PT, Math.min(PT + ph - tH, yOf(hoverItem.sales) - tH / 2));
               return (
@@ -544,8 +552,11 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
                   <text x={tX + 8} y={tY + 30} fontSize={13} fill="#93c5fd" fontWeight="bold">
                     {hoverItem.sales.toLocaleString('ru-RU')} прод.
                   </text>
+                  <text x={tX + 8} y={tY + 46} fontSize={11} fill="#86efac">
+                    остаток ~ {Number(hoverItem.estimated_stock || 0).toLocaleString('ru-RU')} шт.
+                  </text>
                   {maxRet > 0 && (
-                    <text x={tX + 8} y={tY + 46} fontSize={11} fill="#fca5a5">
+                    <text x={tX + 8} y={tY + 60} fontSize={11} fill="#fca5a5">
                       {hoverItem.returns.toLocaleString('ru-RU')} возвр.
                     </text>
                   )}
@@ -569,10 +580,16 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
         <line x1={PL} y1={10} x2={PL + 16} y2={10} stroke="#3b82f6" strokeWidth={2}/>
         <circle cx={PL + 8} cy={10} r={2} fill="#3b82f6"/>
         <text x={PL + 20} y={13.5} fontSize={11} fill="#94a3b8">Продажи</text>
+        {maxStock > 0 && (
+          <>
+            <line x1={PL + 76} y1={10} x2={PL + 94} y2={10} stroke="#22c55e" strokeWidth={2}/>
+            <text x={PL + 98} y={13.5} fontSize={11} fill="#94a3b8">Остаток ~</text>
+          </>
+        )}
         {maxRet > 0 && (
           <>
-            <line x1={PL + 76} y1={10} x2={PL + 94} y2={10} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 2"/>
-            <text x={PL + 98} y={13.5} fontSize={11} fill="#94a3b8">Возвраты</text>
+            <line x1={PL + 164} y1={10} x2={PL + 182} y2={10} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 2"/>
+            <text x={PL + 186} y={13.5} fontSize={11} fill="#94a3b8">Возвраты</text>
           </>
         )}
         {!zoomRange && n > 8 && (
