@@ -916,7 +916,16 @@ app.get('/api/catalog2/item/:code/forecast', (req, res) => {
   try {
     const code = req.params.code.trim();
     const row = db.prepare('SELECT * FROM catalog_forecast WHERE item_code = ?').get(code);
-    if (!row) return res.status(404).json({error: 'no forecast data'});
+    if (!row) {
+      return res.json({
+        item_code: code,
+        missing: true,
+        calc_date: null,
+        peak_months: [],
+        anomaly_dates: [],
+        anomaly_threshold: null,
+      });
+    }
     try { row.peak_months = JSON.parse(row.peak_months || '[]'); } catch { row.peak_months = []; }
 
     // Anomalous days: threshold uses sales-day mean (total/observed), not calendar rate (total/365)
