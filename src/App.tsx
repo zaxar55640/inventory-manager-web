@@ -1808,7 +1808,10 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
                       padding:'4px 8px',borderRadius:5,cursor:'pointer',marginBottom:1,
                       background:path===node.path?'#1d4ed8':path.startsWith(node.path+' / ')?'rgba(29,78,216,.2)':'transparent',
                       fontSize:'0.78em'}}
-                    onClick={() => setPath(node.path)}>
+                    onClick={() => {
+                      setPath(node.path);
+                      if (node.hasChildren && !node.isExpanded) toggleTree(node.path);
+                    }}>
                     <div style={{display:'flex',alignItems:'center',gap:5,overflow:'hidden'}}>
                       {node.hasChildren && (
                         <span style={{color:'#60a5fa',fontSize:'0.9em',flexShrink:0,cursor:'pointer',padding:'0 2px'}}
@@ -3609,6 +3612,7 @@ export function App() {
                       }}
                       onClick={() => {
                         setC2Path(node.path);
+                        if (node.hasChildren && !node.isExpanded) c2ToggleExpand(node.path);
                       }}
                     >
                       <span
