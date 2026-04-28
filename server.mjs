@@ -622,7 +622,7 @@ function catalogPathWhere(pathParts) {
   const base = clauses.join(' AND ');
   // For single-segment paths also match parent_name (covers items without group hierarchy)
   if (pathParts.length === 1) {
-    return { where: `(${base} OR cp.parent_name = ?)`, params: [...pathParts, pathParts[0]] };
+    return { where: `(${base} OR parent_name = ?)`, params: [...pathParts, pathParts[0]] };
   }
   return { where: base, params: pathParts };
 }
