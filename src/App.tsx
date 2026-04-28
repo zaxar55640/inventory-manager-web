@@ -1,5 +1,4 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import type {MouseEvent as ReactMouseEvent} from 'react';
 import {apiUrl} from './config';
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -1990,7 +1989,6 @@ export function App() {
 
   // sidebar collapse
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [sidebarPinned, setSidebarPinned] = useState(true);
   // catalog2 tree panel collapse
   const [c2TreeOpen, setC2TreeOpen] = useState(true);
 
@@ -2504,50 +2502,6 @@ export function App() {
     await loadSuppliers();
   }
 
-  const isDesktop = useCallback(() => window.matchMedia('(min-width: 981px)').matches, []);
-
-  function handleSidebarMouseEnter() {
-    if (!isDesktop() || sidebarPinned) return;
-    setSidebarOpen(true);
-  }
-
-  function handleSidebarMouseLeave(e: ReactMouseEvent<HTMLElement>) {
-    if (!isDesktop() || sidebarPinned) return;
-    const related = e.relatedTarget;
-    if (related instanceof Node && e.currentTarget.contains(related)) return;
-    setSidebarOpen(false);
-  }
-
-  function toggleSidebarPin() {
-    if (!isDesktop()) {
-      setSidebarOpen(v => !v);
-      return;
-    }
-    if (sidebarPinned) {
-      setSidebarPinned(false);
-      setSidebarOpen(false);
-      return;
-    }
-    setSidebarPinned(true);
-    setSidebarOpen(true);
-  }
-
-  useEffect(() => {
-    const media = window.matchMedia('(min-width: 981px)');
-    const syncSidebarMode = () => {
-      if (media.matches) {
-        setSidebarPinned(prev => prev);
-        setSidebarOpen(prev => (sidebarPinned ? true : prev));
-      } else {
-        setSidebarPinned(true);
-        setSidebarOpen(true);
-      }
-    };
-    syncSidebarMode();
-    media.addEventListener?.('change', syncSidebarMode);
-    return () => media.removeEventListener?.('change', syncSidebarMode);
-  }, [sidebarPinned]);
-
   // ── derived ───────────────────────────────────────────────────────────────
 
   const filteredCurrentItems = useMemo(() => {
@@ -2600,11 +2554,10 @@ export function App() {
       <button
         className="sidebar-toggle"
         style={{left: sidebarOpen ? RAIL_W - 14 : 8}}
-        onMouseEnter={() => { if (!sidebarPinned && isDesktop()) setSidebarOpen(true); }}
-        onClick={toggleSidebarPin}
-        title={sidebarPinned ? 'Открепить меню: будет открываться по наведению' : 'Закрепить меню открытым'}
+        onClick={() => setSidebarOpen(v => !v)}
+        title={sidebarOpen ? 'Скрыть меню' : 'Показать меню'}
       >
-        {sidebarPinned ? '📌' : (sidebarOpen ? '‹' : '›')}
+        {sidebarOpen ? '‹' : '›'}
       </button>
 
       {/* modals */}
@@ -2633,11 +2586,7 @@ export function App() {
         />
       )}
 
-      <aside
-        className={sidebarOpen ? 'rail' : 'rail rail-collapsed'}
-        onMouseEnter={handleSidebarMouseEnter}
-        onMouseLeave={handleSidebarMouseLeave}
-      >
+      <aside className={sidebarOpen ? 'rail' : 'rail rail-collapsed'}>
         <div className="brand">
           <h1>Закупки</h1>
           <span style={{fontSize: '0.7em', color: '#22c55e', fontWeight: 700, letterSpacing: '0.05em'}}>v2 · {new Date().toLocaleDateString('ru-RU')}</span>
