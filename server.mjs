@@ -681,6 +681,7 @@ app.get('/api/catalog2/items', (req, res) => {
              CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) AS days_since_last_sale,
              cf.abc_class, cf.xyz_class, cf.forecast_day_matrix, cf.to_order AS forecast_to_order,
              cf.demand_mode AS forecast_mode, cf.w_forecast_final,
+             cf.oos_days_365, cf.oos_fraction,
              (SELECT pr.supplier_name FROM purchase_recommendations pr WHERE pr.item_ref = cp.item_name LIMIT 1) AS supplier_name
       FROM catalog_products cp
       LEFT JOIN (
