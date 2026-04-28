@@ -371,8 +371,8 @@ app.get('/api/drafts/latest', (_req, res) => {
 });
 
 app.post('/api/drafts', (req, res) => {
-  const {draft_mode} = req.body;
-  const result = db.prepare(`INSERT INTO purchase_order_batches (batch_date, supplier_name, status, draft_mode, is_draft) VALUES (date(), '', 'draft', ?, 1)`).run(draft_mode || 'single');
+  const {draft_mode, batch_name} = req.body;
+  const result = db.prepare(`INSERT INTO purchase_order_batches (batch_date, supplier_name, batch_name, status, draft_mode, is_draft) VALUES (date(), '', ?, 'draft', ?, 1)`).run(batch_name || '', draft_mode || 'single');
   res.json({id: result.lastInsertRowid});
 });
 
@@ -420,9 +420,13 @@ app.post('/api/drafts/:id/catalog-items', (req, res) => {
   res.json({ok: true, id: result.lastInsertRowid});
 });
 
+// Ensure batch_name column exists
+try { db.prepare('ALTER TABLE purchase_order_batches ADD COLUMN batch_name TEXT').run(); } catch {}
+
 app.get('/api/orders', (_req, res) => {
   const rows = db.prepare(`
-    SELECT b.id, b.supplier_name, b.status, b.created_at,
+    SELECT b.id, COALESCE(b.batch_name, b.supplier_name, '') AS batch_name,
+           b.supplier_name, b.status, b.created_at,
            COUNT(i.id) AS items_count,
            ROUND(SUM(COALESCE(i.final_qty, i.manager_qty, i.recommended_qty)), 2) AS total_qty
     FROM purchase_order_batches b
@@ -435,8 +439,16 @@ app.get('/api/orders', (_req, res) => {
 });
 
 app.get('/api/orders/:id', (req, res) => {
-  const batch = db.prepare(`SELECT id, supplier_name, status, created_at FROM purchase_order_batches WHERE id = ?`).get(req.params.id);
-  const items = db.prepare(`SELECT id, sku_name, item_ref, recommended_qty, manager_qty, final_qty, reason, item_status FROM purchase_order_items WHERE batch_id = ? ORDER BY id DESC`).all(req.params.id);
+  const batch = db.prepare(`SELECT id, COALESCE(batch_name,'') AS batch_name, supplier_name, status, created_at FROM purchase_order_batches WHERE id = ?`).get(req.params.id);
+  const items = db.prepare(`
+    SELECT i.id, i.sku_name, i.item_ref, i.recommended_qty, i.manager_qty, i.final_qty, i.reason, i.item_status,
+           COALESCE(r.supplier_name,
+             (SELECT pr.supplier_name FROM purchase_recommendations pr WHERE pr.item_ref = i.item_ref LIMIT 1)
+           ) AS supplier_name
+    FROM purchase_order_items i
+    LEFT JOIN purchase_recommendations r ON r.id = i.recommendation_id
+    WHERE i.batch_id = ? ORDER BY i.id DESC
+  `).all(req.params.id);
   res.json({batch, items});
 });
 
@@ -563,7 +575,12 @@ app.get('/api/products-catalog/groups', (_req, res) => {
 function catalogPathWhere(pathParts) {
   if (!pathParts.length) return { where: '', params: [] };
   const clauses = pathParts.map((_, i) => `group_l${i} = ?`);
-  return { where: clauses.join(' AND '), params: pathParts };
+  const base = clauses.join(' AND ');
+  // For single-segment paths also match parent_name (covers items without group hierarchy)
+  if (pathParts.length === 1) {
+    return { where: `(${base} OR cp.parent_name = ?)`, params: [...pathParts, pathParts[0]] };
+  }
+  return { where: base, params: pathParts };
 }
 
 // Returns immediate child group names + item count for each, at the given path depth
@@ -641,6 +658,10 @@ app.get('/api/catalog2/items', (req, res) => {
     if (req.query.has_stock === '1') {
       conditions.push('cp.qty > 0');
     }
+    if (req.query.supplier) {
+      conditions.push('cp.item_name IN (SELECT item_ref FROM purchase_recommendations WHERE supplier_name = ?)');
+      params.push(String(req.query.supplier));
+    }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
@@ -675,6 +696,19 @@ app.get('/api/catalog2/items', (req, res) => {
 });
 
 // Search group names across all hierarchy levels
+app.get('/api/catalog2/suppliers', (_req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT DISTINCT pr.supplier_name
+      FROM purchase_recommendations pr
+      JOIN catalog_products cp ON cp.item_name = pr.item_ref
+      WHERE pr.supplier_name IS NOT NULL AND pr.supplier_name != '' AND pr.supplier_name != 'UNMAPPED_SUPPLIER'
+      ORDER BY pr.supplier_name
+    `).all();
+    res.json(rows.map(r => r.supplier_name));
+  } catch(err) { res.status(500).json({error: err.message}); }
+});
+
 app.get('/api/catalog2/search-groups', (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
@@ -719,6 +753,10 @@ app.get('/api/catalog2/analytics', (req, res) => {
       const { where: pw, params: pp } = catalogPathWhere(pathParts);
       conditions.push(pw);
       params.push(...pp);
+    }
+    if (req.query.supplier) {
+      conditions.push('cp.item_name IN (SELECT item_ref FROM purchase_recommendations WHERE supplier_name = ?)');
+      params.push(String(req.query.supplier));
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';

@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import type {MouseEvent as ReactMouseEvent} from 'react';
 import {apiUrl} from './config';
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -40,10 +41,10 @@ type Recommendation = {
 };
 
 type DraftSummary = {id: number; supplier_name: string; status: string; created_at: string; draft_mode: 'single' | 'multi'; items_count: number; total_qty: number};
-type OrderBatch = {id: number; supplier_name: string; status: string; created_at: string; items_count: number; total_qty: number};
+type OrderBatch = {id: number; batch_name: string; supplier_name: string; status: string; created_at: string; items_count: number; total_qty: number};
 type DraftItem = {id: number; recommendation_id: number; item_ref: string; sku_name: string; norm_name: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string};
 type DraftDetail = {batch: DraftSummary; items: DraftItem[]};
-type OrderDetail = {batch: {id: number; supplier_name: string; status: string; created_at: string}; items: Array<{id: number; sku_name: string; item_ref: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string; item_status: string}>};
+type OrderDetail = {batch: {id: number; batch_name: string; supplier_name: string; status: string; created_at: string}; items: Array<{id: number; sku_name: string; item_ref: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string; item_status: string; supplier_name?: string}>};
 type NonLiquidItem = {store: string; store_ref: string; item_ref: string; sku_name: string; norm_name: string; subgroup: string; available_qty: number; sales_qty_4m: number; last_sale_date: string | null; days_since_last_sale: number | null; is_seasonal: number; season_note: string | null; nlq_score: number | null};
 type NonLiquidResponse = {items: NonLiquidItem[]; total: number; limit: number; offset: number; has_more: boolean};
 type Dashboard = {total_to_order: number; urgent_count: number; pre_season_count: number; overstock_count: number; new_items_count: number};
@@ -321,7 +322,7 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
     );
   }
 
-  const W = 640, H = 210, PL = 52, PR = 16, PT = 28, PB = 38;
+  const W = 640, H = 260, PL = 58, PR = 16, PT = 28, PB = 46;
   const pw = W - PL - PR, ph = H - PT - PB;
 
   const displayed = zoomRange ? series.slice(zoomRange[0], zoomRange[1] + 1) : series;
@@ -433,7 +434,7 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
           return (
             <g key={t}>
               <line x1={PL} y1={y} x2={W - PR} y2={y} stroke={t === 0 ? '#334155' : '#1e293b'} strokeWidth={t === 0 ? 1 : 0.6}/>
-              <text x={PL - 5} y={y + 3.5} fontSize={8.5} textAnchor="end" fill="#475569">
+              <text x={PL - 5} y={y + 3.5} fontSize={11} textAnchor="end" fill="#475569">
                 {Math.round(maxY * t)}
               </text>
             </g>
@@ -497,7 +498,7 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
           if (i % labelStep !== 0 && i !== n - 1) return null;
           if (i === n - 1 && n > 1 && (n - 1) % labelStep < labelStep * 0.5) return null;
           return (
-            <text key={i} x={xOf(i)} y={H - 4} fontSize={8} textAnchor="middle" fill="#475569">
+            <text key={i} x={xOf(i)} y={H - 4} fontSize={11} textAnchor="middle" fill="#475569">
               {fmtPeriod(s.period, gran)}
             </text>
           );
@@ -509,21 +510,21 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
             <line x1={hoverX} y1={PT} x2={hoverX} y2={PT + ph}
               stroke="#475569" strokeWidth={0.8} strokeDasharray="3 2"/>
             {(() => {
-              const tW = 126, tH = maxRet > 0 ? 52 : 38;
+              const tW = 148, tH = maxRet > 0 ? 62 : 46;
               const tX = tooltipLeft ? hoverX - tW - 8 : hoverX + 8;
               const tY = Math.max(PT, Math.min(PT + ph - tH, yOf(hoverItem.sales) - tH / 2));
               return (
                 <g>
                   <rect x={tX} y={tY} width={tW} height={tH} rx={4}
                     fill="#1e293b" stroke="#334155" strokeWidth={0.8}/>
-                  <text x={tX + 8} y={tY + 13} fontSize={8.5} fill="#64748b">
+                  <text x={tX + 8} y={tY + 14} fontSize={11} fill="#64748b">
                     {fmtPeriod(hoverItem.period, gran)}
                   </text>
-                  <text x={tX + 8} y={tY + 27} fontSize={10} fill="#93c5fd" fontWeight="bold">
+                  <text x={tX + 8} y={tY + 30} fontSize={13} fill="#93c5fd" fontWeight="bold">
                     {hoverItem.sales.toLocaleString('ru-RU')} прод.
                   </text>
                   {maxRet > 0 && (
-                    <text x={tX + 8} y={tY + 42} fontSize={9} fill="#fca5a5">
+                    <text x={tX + 8} y={tY + 46} fontSize={11} fill="#fca5a5">
                       {hoverItem.returns.toLocaleString('ru-RU')} возвр.
                     </text>
                   )}
@@ -538,7 +539,7 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
           <>
             <line x1={PL} y1={yOf(forecastPerPeriod)} x2={W - PR} y2={yOf(forecastPerPeriod)}
               stroke="#f59e0b" strokeWidth={1} strokeDasharray="5 3" opacity={0.7}/>
-            <text x={W - PR - 4} y={yOf(forecastPerPeriod) - 4} fontSize={7.5} textAnchor="end"
+            <text x={W - PR - 4} y={yOf(forecastPerPeriod) - 4} fontSize={10} textAnchor="end"
               fill="#f59e0b" opacity={0.85}>прогноз</text>
           </>
         )}
@@ -546,15 +547,15 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
         {/* Legend */}
         <line x1={PL} y1={10} x2={PL + 16} y2={10} stroke="#3b82f6" strokeWidth={2}/>
         <circle cx={PL + 8} cy={10} r={2} fill="#3b82f6"/>
-        <text x={PL + 20} y={13.5} fontSize={9} fill="#94a3b8">Продажи</text>
+        <text x={PL + 20} y={13.5} fontSize={11} fill="#94a3b8">Продажи</text>
         {maxRet > 0 && (
           <>
-            <line x1={PL + 68} y1={10} x2={PL + 84} y2={10} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 2"/>
-            <text x={PL + 88} y={13.5} fontSize={9} fill="#94a3b8">Возвраты</text>
+            <line x1={PL + 76} y1={10} x2={PL + 94} y2={10} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="4 2"/>
+            <text x={PL + 98} y={13.5} fontSize={11} fill="#94a3b8">Возвраты</text>
           </>
         )}
         {!zoomRange && n > 8 && (
-          <text x={W - PR} y={13.5} fontSize={7} textAnchor="end" fill="#1e293b">
+          <text x={W - PR} y={13.5} fontSize={9} textAnchor="end" fill="#1e293b">
             выделите мышью для зума
           </text>
         )}
@@ -1482,6 +1483,9 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
   const [treeExpanded, setTreeExpanded] = useState<Set<string>>(new Set());
   const [treeSearch, setTreeSearch] = useState('');
   const [treeSearchRes, setTreeSearchRes] = useState<C2GroupResult[]>([]);
+  // supplier filter
+  const [analyticsSupplierFilter, setAnalyticsSupplierFilter] = useState('');
+  const [analyticsSupplierList, setAnalyticsSupplierList] = useState<string[]>([]);
   // path / data
   const [path, setPath] = useState(initialPath);
   const [summary, setSummary] = useState<AnalyticsSummary|null>(null);
@@ -1559,16 +1563,23 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
 
   // ── data loading ──────────────────────────────────────────────────────────
   useEffect(() => {
+    fetch(apiUrl('/api/catalog2/suppliers')).then(r=>r.json())
+      .then(d => setAnalyticsSupplierList(Array.isArray(d) ? d : []))
+      .catch(()=>{});
+  }, []);
+
+  useEffect(() => {
     setLoading(true);
     setDrillKey(null);
     setDrillItems([]);
     const p = path ? `?path=${encodeURIComponent(path)}` : '';
+    const sup = analyticsSupplierFilter ? `&supplier=${encodeURIComponent(analyticsSupplierFilter)}` : '';
     const scope = path.split(' / ').length > 1 ? 'subgroup' : 'group';
     Promise.all([
       fetch(apiUrl(`/api/analytics/summary${p}`)).then(r=>r.json()),
       fetch(apiUrl(`/api/analytics/sales-by-year${p}`)).then(r=>r.json()),
       fetch(apiUrl(`/api/analytics/suppliers${p}`)).then(r=>r.json()),
-      fetch(apiUrl(`/api/catalog2/analytics?scope=${scope}${p ? '&path='+encodeURIComponent(path) : ''}`)).then(r=>r.json()),
+      fetch(apiUrl(`/api/catalog2/analytics?scope=${scope}${p ? '&path='+encodeURIComponent(path) : ''}${sup}`)).then(r=>r.json()),
     ]).then(([sum,sales,sups,bd]) => {
       setSummary(sum);
       setSalesData(Array.isArray(sales) ? sales : []);
@@ -1576,7 +1587,7 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
       setBreakdown(bd && bd.segments ? bd : null);
     }).catch(console.error)
     .finally(() => setLoading(false));
-  }, [path]);
+  }, [path, analyticsSupplierFilter]);
 
   useEffect(() => {
     const segs = breakdown?.segments || [];
@@ -1674,10 +1685,18 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
         <div style={{padding:'10px 10px 8px',borderBottom:'1px solid #1e293b',flexShrink:0}}>
           <div style={{fontSize:'0.65em',color:'#334155',textTransform:'uppercase',letterSpacing:'.08em',fontWeight:700,marginBottom:6}}>Группы товаров</div>
           <input
-            style={{width:'100%',boxSizing:'border-box',background:'#0f172a',border:'1px solid #1e293b',borderRadius:6,color:'#f1f5f9',padding:'4px 8px',fontSize:'0.78em',outline:'none'}}
+            style={{width:'100%',boxSizing:'border-box',background:'#0f172a',border:'1px solid #1e293b',borderRadius:6,color:'#f1f5f9',padding:'4px 8px',fontSize:'0.78em',outline:'none',marginBottom:6}}
             placeholder="Поиск группы…" value={treeSearch}
             onChange={e => setTreeSearch(e.target.value)}
           />
+          <select
+            value={analyticsSupplierFilter}
+            onChange={e => setAnalyticsSupplierFilter(e.target.value)}
+            style={{width:'100%',boxSizing:'border-box',background:'#0f172a',border:'1px solid #1e293b',borderRadius:6,color:analyticsSupplierFilter?'#f1f5f9':'#475569',padding:'4px 6px',fontSize:'0.75em',outline:'none'}}
+          >
+            <option value="">Все поставщики</option>
+            {analyticsSupplierList.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
         </div>
         <div style={{overflowY:'auto',flex:1,padding:'6px 4px'}}>
           {treeSearch.length >= 2 ? (
@@ -1987,8 +2006,8 @@ export function App() {
   const [cartSubmitting, setCartSubmitting] = useState(false);
   const [draftCartValidated, setDraftCartValidated] = useState(false);
 
-  // sidebar collapse
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // sidebar collapse — starts hidden, opens on hover
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   // catalog2 tree panel collapse
   const [c2TreeOpen, setC2TreeOpen] = useState(true);
 
@@ -2013,8 +2032,11 @@ export function App() {
   const [c2SortBy, setC2SortBy] = useState('qty');
   const [c2SortDir, setC2SortDir] = useState<'asc'|'desc'>('desc');
   const [c2HasStock, setC2HasStock] = useState(false);
+  const [c2Supplier, setC2Supplier] = useState('');
+  const [c2Suppliers, setC2Suppliers] = useState<string[]>([]);
   const [c2TreeSearch, setC2TreeSearch] = useState('');
   const [c2TreeSearchResults, setC2TreeSearchResults] = useState<C2GroupResult[]>([]);
+  const [c2OrderName, setC2OrderName] = useState('');
   const [c2Forecast, setC2Forecast] = useState<C2Forecast | null>(null);
   const [c2ForecastLoading, setC2ForecastLoading] = useState(false);
 
@@ -2084,7 +2106,7 @@ export function App() {
     return path;
   }
 
-  async function c2LoadItems(path: string, q: string, offset: number, sortBy = c2SortBy, sortDir = c2SortDir, hasStock = c2HasStock) {
+  async function c2LoadItems(path: string, q: string, offset: number, sortBy = c2SortBy, sortDir = c2SortDir, hasStock = c2HasStock, supplier = c2Supplier) {
     const params = new URLSearchParams();
     if (path) params.set('path', path);
     if (q.trim()) params.set('q', q.trim());
@@ -2093,6 +2115,7 @@ export function App() {
     params.set('sort_by', sortBy);
     params.set('sort_dir', sortDir);
     if (hasStock) params.set('has_stock', '1');
+    if (supplier) params.set('supplier', supplier);
     setC2Loading(true);
     try {
       const data = await fetchJSON<Catalog2Response>(apiUrl(`/api/catalog2/items?${params}`));
@@ -2297,8 +2320,28 @@ export function App() {
     if (tab !== 'catalog2') return;
     const t = setTimeout(() => { setC2Offset(0); c2LoadItems(c2Path, c2Search, 0); }, 300);
     return () => clearTimeout(t);
-  }, [c2Path, c2Search, c2SortBy, c2SortDir, c2HasStock]);
+  }, [c2Path, c2Search, c2SortBy, c2SortDir, c2HasStock, c2Supplier]);
 
+  // Load catalog2 suppliers on mount
+  useEffect(() => {
+    fetchJSON<string[]>(apiUrl('/api/catalog2/suppliers'))
+      .then(data => setC2Suppliers(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, []);
+
+  // Auto-expand tree path ancestors when c2Path changes (task 5)
+  useEffect(() => {
+    if (!c2Path) return;
+    const parts = c2Path.split(' / ');
+    const ancestors = parts.slice(0, -1).map((_: string, i: number) => parts.slice(0, i + 1).join(' / '));
+    const allToExpand = ['', ...ancestors];
+    setC2Expanded(prev => {
+      const next = new Set(prev);
+      allToExpand.forEach(p => next.add(p));
+      return next;
+    });
+    allToExpand.forEach(p => { if (!c2TreeCache.has(p)) c2LoadChildren(p); });
+  }, [c2Path]);
 
   useEffect(() => {
     const t = setTimeout(() => c2SearchGroups(c2TreeSearch), 250);
@@ -2408,6 +2451,8 @@ export function App() {
 
   async function cartCheckout() {
     if (draftCart.size === 0 || cartSubmitting) return;
+    // Require order name
+    if (!c2OrderName.trim()) { setDraftCartValidated(true); return; }
     // Only require reason when there IS a recommendation and qty deviates from it
     const missingReason = Array.from(draftCart.entries()).filter(
       ([, e]) => e.recommendedOrder > 0 && e.qty !== e.recommendedOrder && !e.reason.trim()
@@ -2417,7 +2462,7 @@ export function App() {
     setCartSubmitting(true);
     let createdId: number | null = null;
     try {
-      const {id: draftId} = await fetchJSON<{id: number}>(apiUrl('/api/drafts'), {method: 'POST', body: JSON.stringify({draft_mode: 'multi'})});
+      const {id: draftId} = await fetchJSON<{id: number}>(apiUrl('/api/drafts'), {method: 'POST', body: JSON.stringify({draft_mode: 'multi', batch_name: c2OrderName.trim() || 'Заявка из каталога'})});
       createdId = draftId;
       for (const [, entry] of draftCart) {
         const item = entry.item;
@@ -2444,6 +2489,7 @@ export function App() {
     setDraftCart(new Map());
     setCartOpen(false);
     setDraftCartValidated(false);
+    setC2OrderName('');
     await loadOrders();
     if (createdId) {
       try { await openOrderDetail(createdId); } catch(e2) { console.error('order detail load failed', e2); }
@@ -2502,6 +2548,34 @@ export function App() {
     await loadSuppliers();
   }
 
+  const isDesktopSidebar = useCallback(() => window.matchMedia('(min-width: 981px)').matches, []);
+
+  function handleSidebarMouseEnter() {
+    if (!isDesktopSidebar()) return;
+    setSidebarOpen(true);
+  }
+
+  function handleSidebarMouseLeave(e: ReactMouseEvent<HTMLElement>) {
+    if (!isDesktopSidebar()) return;
+    const related = e.relatedTarget;
+    if (related instanceof Node && e.currentTarget.contains(related)) return;
+    setSidebarOpen(false);
+  }
+
+  function toggleSidebar() {
+    setSidebarOpen(v => !v);
+  }
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 981px)');
+    const syncSidebar = () => {
+      if (!media.matches) setSidebarOpen(true);
+    };
+    syncSidebar();
+    media.addEventListener?.('change', syncSidebar);
+    return () => media.removeEventListener?.('change', syncSidebar);
+  }, []);
+
   // ── derived ───────────────────────────────────────────────────────────────
 
   const filteredCurrentItems = useMemo(() => {
@@ -2554,7 +2628,8 @@ export function App() {
       <button
         className="sidebar-toggle"
         style={{left: sidebarOpen ? RAIL_W - 14 : 8}}
-        onClick={() => setSidebarOpen(v => !v)}
+        onMouseEnter={() => { if (isDesktopSidebar()) setSidebarOpen(true); }}
+        onClick={toggleSidebar}
         title={sidebarOpen ? 'Скрыть меню' : 'Показать меню'}
       >
         {sidebarOpen ? '‹' : '›'}
@@ -2586,7 +2661,11 @@ export function App() {
         />
       )}
 
-      <aside className={sidebarOpen ? 'rail' : 'rail rail-collapsed'}>
+      <aside
+        className={sidebarOpen ? 'rail' : 'rail rail-collapsed'}
+        onMouseEnter={handleSidebarMouseEnter}
+        onMouseLeave={handleSidebarMouseLeave}
+      >
         <div className="brand">
           <h1>Закупки</h1>
           <span style={{fontSize: '0.7em', color: '#22c55e', fontWeight: 700, letterSpacing: '0.05em'}}>v2 · {new Date().toLocaleDateString('ru-RU')}</span>
@@ -2950,6 +3029,7 @@ export function App() {
                   <thead>
                     <tr>
                       <th style={{width:50}}>#</th>
+                      <th>Название</th>
                       <th>Дата</th>
                       <th>Статус</th>
                       <th style={{textAlign:'right'}}>Позиций</th>
@@ -2959,7 +3039,7 @@ export function App() {
                   </thead>
                   <tbody>
                     {orders
-                      .filter(o => !orderSearch || String(o.id).includes(orderSearch) || (o.supplier_name||'').toLowerCase().includes(orderSearch.toLowerCase()))
+                      .filter(o => !orderSearch || String(o.id).includes(orderSearch) || (o.batch_name||'').toLowerCase().includes(orderSearch.toLowerCase()) || (o.supplier_name||'').toLowerCase().includes(orderSearch.toLowerCase()))
                       .map(order => {
                         const isOpen = openOrder?.batch.id === order.id;
                         const statusColor = order.status === 'completed' ? '#22c55e' : order.status === 'submitted' ? '#3b82f6' : '#94a3b8';
@@ -2968,7 +3048,11 @@ export function App() {
                             onClick={() => isOpen ? setOpenOrder(null) : openOrderDetail(order.id)}
                             style={{cursor:'pointer', background: isOpen ? '#1e3a5f' : undefined}}>
                             <td style={{fontWeight:600,color:'#94a3b8'}}>#{order.id}</td>
-                            <td>{new Date(order.created_at).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
+                            <td style={{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color:'#e2e8f0',fontWeight:500}}
+                              title={order.batch_name||order.supplier_name||''}>
+                              {order.batch_name || order.supplier_name || '—'}
+                            </td>
+                            <td style={{whiteSpace:'nowrap'}}>{new Date(order.created_at).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
                             <td><span style={{display:'inline-block',padding:'2px 8px',borderRadius:4,background:statusColor+'22',color:statusColor,fontSize:'0.8rem',fontWeight:600}}>{order.status}</span></td>
                             <td style={{textAlign:'right'}}>{order.items_count}</td>
                             <td style={{textAlign:'right'}}>{currency.format(order.total_qty)}</td>
@@ -2995,10 +3079,10 @@ export function App() {
             {openOrder && (
               <div style={{flex:'1 1 0',minHeight:0,overflow:'hidden',display:'flex',flexDirection:'column',borderTop:'2px solid #3b82f6'}}>
                 <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px',background:'#1e293b',flexShrink:0}}>
-                  <div>
-                    <span className="eyebrow">Состав заявки</span>
-                    <span style={{fontWeight:700,fontSize:'1rem',marginLeft:8}}>#{openOrder.batch.id}</span>
-                    <span className="meta" style={{marginLeft:8}}>{openOrder.items.length} позиций</span>
+                  <div style={{display:'flex',alignItems:'baseline',gap:10,flexWrap:'wrap'}}>
+                    <span className="eyebrow">Заявка #{openOrder.batch.id}</span>
+                    {openOrder.batch.batch_name && <span style={{fontWeight:700,fontSize:'0.95rem',color:'#e2e8f0'}}>{openOrder.batch.batch_name}</span>}
+                    <span className="meta">{openOrder.items.length} позиций</span>
                   </div>
                   <div style={{display:'flex',gap:8,alignItems:'center'}}>
                     <button
@@ -3017,6 +3101,7 @@ export function App() {
                       <thead>
                         <tr>
                           <th>Товар</th>
+                          <th>Поставщик</th>
                           <th style={{textAlign:'right',width:80}}>Рек.</th>
                           <th style={{textAlign:'right',width:110}}>Кол-во</th>
                           <th>Причина</th>
@@ -3032,6 +3117,9 @@ export function App() {
                               <td>
                                 <div style={{fontWeight:500,fontSize:'0.85rem'}}>{item.sku_name}</div>
                                 <div className="meta">{item.item_ref}</div>
+                              </td>
+                              <td style={{color:'#64748b',fontSize:'0.8rem',whiteSpace:'nowrap',maxWidth:140,overflow:'hidden',textOverflow:'ellipsis'}}>
+                                {item.supplier_name || '—'}
                               </td>
                               <td style={{textAlign:'right',color:'#64748b'}}>{item.recommended_qty ?? '—'}</td>
                               <td style={{textAlign:'right'}}>
@@ -3377,13 +3465,16 @@ export function App() {
                 {!c2TreeCache.has('') && (
                   <div style={{padding: '16px 8px', color: '#334155', fontSize: '0.8em', textAlign: 'center'}}>Загрузка…</div>
                 )}
-                {c2VisibleNodes.map(node => (
+                {c2VisibleNodes.map(node => {
+                  const isActive = c2Path === node.path;
+                  const isAncestor = !isActive && c2Path.startsWith(node.path + ' / ');
+                  return (
                   <div key={node.path} style={{paddingLeft: node.depth * 14}}>
                     <div
                       style={{
                         display: 'flex', alignItems: 'center', gap: 3,
                         padding: '4px 8px', borderRadius: 5, cursor: 'pointer',
-                        background: c2Path === node.path ? '#1d4ed8' : 'transparent',
+                        background: isActive ? '#1d4ed8' : isAncestor ? 'rgba(29,78,216,.18)' : 'transparent',
                         fontSize: '0.8em',
                       }}
                       onClick={() => {
@@ -3394,13 +3485,14 @@ export function App() {
                       <span style={{width: 12, color: '#334155', fontSize: '0.85em', flexShrink: 0}}>
                         {node.hasChildren ? (node.isExpanded ? '▾' : '▸') : '·'}
                       </span>
-                      <span style={{flex: 1, color: c2Path === node.path ? '#fff' : '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={node.name}>
+                      <span style={{flex: 1, color: isActive ? '#fff' : isAncestor ? '#93c5fd' : '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: isAncestor ? 600 : 400}} title={node.name}>
                         {node.name}
                       </span>
                       <span style={{color: '#334155', fontSize: '0.75em', flexShrink: 0, marginLeft: 4}}>{node.itemCount.toLocaleString('ru-RU')}</span>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
               )}
             </div>
@@ -3459,6 +3551,14 @@ export function App() {
                     value={c2Search}
                     onChange={e => setC2Search(e.target.value)}
                   />
+                  <select
+                    value={c2Supplier}
+                    onChange={e => { setC2Supplier(e.target.value); setC2Offset(0); }}
+                    style={{background:'#1e293b',border:'1px solid #334155',borderRadius:6,color:c2Supplier?'#f1f5f9':'#64748b',padding:'5px 8px',fontSize:'0.82em',flexShrink:0,maxWidth:180}}
+                  >
+                    <option value="">Все поставщики</option>
+                    {c2Suppliers.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
                   <label style={{display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, cursor: 'pointer', userSelect: 'none'}}>
                     <input
                       type="checkbox"
@@ -3518,6 +3618,7 @@ export function App() {
                         {label: 'Подгруппа', key: 'parent_name', right: false},
                         {label: 'ABC·XYZ', key: 'abc_class', right: true},
                         {label: 'Остаток', key: 'qty', right: true},
+                        {label: 'Дельта', key: null, right: true},
                         {label: 'Нужно остатков', key: 'recommended_stock', right: true},
                         {label: 'Нужно заказать', key: 'to_order', right: true},
                         {label: 'Цена прод.', key: 'retail_price', right: true},
@@ -3617,6 +3718,15 @@ export function App() {
                             <div>{item.qty > 0 ? item.qty.toLocaleString('ru-RU') : '—'}</div>
                             {(recommendedOrder > 0) && <div style={{fontSize:'0.72em', color:'#f59e0b', fontWeight:700}}>рекомендуется дозакупить</div>}
                           </td>
+                          <td style={{padding: '7px 10px', textAlign: 'right', fontWeight: 700, whiteSpace:'nowrap'}}>
+                            {(() => {
+                              const delta = Math.round(recommendedStock) - (item.qty || 0);
+                              if (!recommendedStock) return <span style={{color:'#334155'}}>—</span>;
+                              return <span style={{color: delta < 0 ? '#f87171' : delta > 0 ? '#4ade80' : '#475569'}}>
+                                {delta > 0 ? '+' : ''}{delta.toLocaleString('ru-RU')}
+                              </span>;
+                            })()}
+                          </td>
                           <td style={{padding: '7px 10px', textAlign: 'right', color: '#93c5fd', fontWeight: 600}}>
                             {recommendedStock > 0 ? Math.round(recommendedStock).toLocaleString('ru-RU') : '—'}
                           </td>
@@ -3683,11 +3793,17 @@ export function App() {
         {tab === 'draftOrder' && (
           <section className="card orders-card" style={{display:'flex',flexDirection:'column',height:'calc(100vh - 56px)',overflow:'hidden',padding:0}}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px',borderBottom:'1px solid #1e293b',flexShrink:0,gap:12,flexWrap:'wrap'}}>
-              <div style={{display:'flex',alignItems:'baseline',gap:10}}>
-                <h2 style={{margin:0,fontSize:'1rem',fontWeight:700}}>Заявка</h2>
-                <span className="meta">{draftCart.size} позиций</span>
+              <div style={{display:'flex',alignItems:'center',gap:12,flex:1,minWidth:0}}>
+                <h2 style={{margin:0,fontSize:'1rem',fontWeight:700,flexShrink:0}}>Заявка</h2>
+                <input
+                  value={c2OrderName}
+                  onChange={e => setC2OrderName(e.target.value)}
+                  placeholder="Название заявки (обязательно)…"
+                  style={{flex:1,minWidth:0,background:'#0f172a',border:`1px solid ${draftCartValidated && !c2OrderName.trim() ? '#ef4444' : '#334155'}`,borderRadius:6,color:'#f1f5f9',padding:'5px 10px',fontSize:'0.85rem',outline:'none'}}
+                />
+                <span className="meta" style={{flexShrink:0}}>{draftCart.size} поз.</span>
               </div>
-              <button className="ghost-btn" style={{fontSize:'0.82rem',padding:'4px 10px'}}
+              <button className="ghost-btn" style={{fontSize:'0.82rem',padding:'4px 10px',flexShrink:0}}
                 onClick={() => { setTab('catalog2'); navigateToTab('catalog2'); }}>
                 ← В каталог
               </button>
