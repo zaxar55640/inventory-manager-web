@@ -2403,6 +2403,16 @@ export function App() {
 
   async function saveOrderEdits() {
     if (!openOrder) return;
+    for (const [itemId, edit] of orderEdits) {
+      const orig = openOrder.items.find(i => i.id === itemId);
+      if (!orig) continue;
+      const origQty = orig.final_qty ?? orig.manager_qty;
+      const changedQty = edit.qty !== origQty;
+      if (changedQty && !String(edit.reason || '').trim()) {
+        alert(`Для изменения количества у товара "${orig.sku_name}" нужно указать причину.`);
+        return;
+      }
+    }
     setOrderEditSaving(true);
     try {
       for (const [itemId, edit] of orderEdits) {
@@ -2417,6 +2427,8 @@ export function App() {
       }
       await openOrderDetail(openOrder.batch.id);
       await loadOrders();
+      if (tab === 'catalog2') await c2LoadItems(c2Path, c2Search, c2Offset);
+      if (tab === 'catalog') await loadCatalog(catalogGroup, catalogSearch, catalogSupplier, catalogSortBy, catalogSortDir, catalogOffset);
     } finally { setOrderEditSaving(false); }
   }
 
@@ -2602,8 +2614,8 @@ export function App() {
           ? Math.max(0, Math.ceil((forecast.forecast_day_matrix || 0) * ((forecast.lead_time_days || 0) + (forecast.order_cycle_days || 0)) + (forecast.ss_total || 0)))
           : (item.recommended_stock ?? ((item.qty || 0) + Math.max(0, item.to_order ?? item.forecast_to_order ?? 0)));
         const recOrder = forecast
-          ? Math.max(0, Math.ceil(recStock - (item.qty || 0)))
-          : Math.max(0, item.to_order ?? item.forecast_to_order ?? 0);
+          ? Math.max(0, Math.ceil(recStock - ((item.qty || 0) + (item.in_delivery_qty || 0))))
+          : Math.max(0, (item.to_order ?? item.forecast_to_order ?? 0) - (item.in_delivery_qty || 0));
         next.set(key, {item, recommendedOrder: recOrder});
       }
       return next;
@@ -3914,8 +3926,8 @@ export function App() {
                         ? Math.max(0, Math.ceil((forecast.forecast_day_matrix || 0) * ((forecast.lead_time_days || 0) + (forecast.order_cycle_days || 0)) + (forecast.ss_total || 0)))
                         : (item.recommended_stock ?? ((item.qty || 0) + Math.max(0, item.to_order ?? item.forecast_to_order ?? 0)));
                       const recommendedOrder = forecast
-                        ? Math.max(0, Math.ceil(recommendedStock - (item.qty || 0)))
-                        : Math.max(0, item.to_order ?? item.forecast_to_order ?? 0);
+                        ? Math.max(0, Math.ceil(recommendedStock - ((item.qty || 0) + (item.in_delivery_qty || 0))))
+                        : Math.max(0, (item.to_order ?? item.forecast_to_order ?? 0) - (item.in_delivery_qty || 0));
                       const days = item.days_since_last_sale;
                       const key = String(item.id);
                       const inDraft = draftCart.has(key);
@@ -3975,7 +3987,7 @@ export function App() {
                           </td>
                           <td style={{padding: '7px 10px', textAlign: 'right', fontWeight: 700, whiteSpace:'nowrap'}}>
                             {(() => {
-                              const delta = Math.round(recommendedStock) - (item.qty || 0);
+                              const delta = Math.round(recommendedStock) - ((item.qty || 0) + (item.in_delivery_qty || 0));
                               if (!recommendedStock) return <span style={{color:'#334155'}}>—</span>;
                               return <span style={{color: delta < 0 ? '#f87171' : delta > 0 ? '#4ade80' : '#475569'}}>
                                 {delta > 0 ? '+' : ''}{delta.toLocaleString('ru-RU')}

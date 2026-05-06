@@ -1062,8 +1062,10 @@ app.get('/api/catalog2/item/:code/forecast', (req, res) => {
       ORDER BY pob.id DESC
     `).all(code);
     row.in_delivery_qty = row.active_orders.reduce((s, x) => s + Number(x.qty || 0), 0);
+    const cpRow = stmt(`SELECT COALESCE(qty, 0) AS qty FROM catalog_products WHERE item_code = ? LIMIT 1`).get(code);
+    row.current_qty = Number(cpRow?.qty || 0);
     if (typeof row.recommended_stock === 'number') {
-      row.to_order_adjusted = Math.max(0, Math.ceil(Number(row.recommended_stock || 0) - Number(row.in_delivery_qty || 0)));
+      row.to_order_adjusted = Math.max(0, Math.ceil(Number(row.recommended_stock || 0) - row.current_qty - Number(row.in_delivery_qty || 0)));
     }
     res.json(row);
   } catch (err) { res.status(500).json({error: err.message}); }
