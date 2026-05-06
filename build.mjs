@@ -26,6 +26,13 @@ writeFileSync('index.html', DEV_TEMPLATE);
 // Run Vite build
 execSync('npx vite build', { stdio: 'inherit' });
 
+// Inject config.js script into dist/index.html (before the main module script)
+let html = readFileSync('dist/index.html', 'utf8');
+if (!html.includes('config.js')) {
+  html = html.replace('<script type="module"', '<script src="config.js"></script>\n    <script type="module"');
+  writeFileSync('dist/index.html', html);
+}
+
 // Copy built index.html to root (for GitHub Pages)
 copyFileSync('dist/index.html', 'index.html');
 

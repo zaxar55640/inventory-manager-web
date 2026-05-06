@@ -566,7 +566,7 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
                     {fmtPeriod(hoverItem.period, gran)}
                   </text>
                   <text x={tX + 8} y={tY + 30} fontSize={13} fill="#93c5fd" fontWeight="bold">
-                    {hoverItem.sales.toLocaleString('ru-RU')} прод.
+                    {num(hoverItem.sales)} прод.
                   </text>
                   <text x={tX + 8} y={tY + 46} fontSize={11} fill="#86efac">
                     остаток ~ {Number(hoverItem.estimated_stock || 0).toLocaleString('ru-RU')} шт.
@@ -578,7 +578,7 @@ function SalesLineChart({series, gran, peakMonths, forecastDayMatrix}: {series: 
                   )}
                   {maxRet > 0 && (
                     <text x={tX + 8} y={tY + (Number(hoverItem.receipts || 0) > 0 ? 74 : 60)} fontSize={11} fill="#fca5a5">
-                      {hoverItem.returns.toLocaleString('ru-RU')} возвр.
+                      {num(hoverItem.returns)} возвр.
                     </text>
                   )}
                 </g>
@@ -1276,7 +1276,7 @@ function AnalyticsDonut({summary, drillKey, onDrill}: {
             onClick={() => onDrill(drillKey===a.key ? null : a.key)}
             onMouseEnter={() => setHov(a.key)} onMouseLeave={() => setHov(null)}/>
         ))}
-        <text x={cx} y={cy-6} textAnchor="middle" fill="#f1f5f9" fontSize={26} fontWeight={700}>{total.toLocaleString('ru-RU')}</text>
+        <text x={cx} y={cy-6} textAnchor="middle" fill="#f1f5f9" fontSize={26} fontWeight={700}>{num(total, '0')}</text>
         <text x={cx} y={cx+10} textAnchor="middle" fill="#64748b" fontSize={11}>с остатком</text>
       </svg>
       <div style={{display:'flex',flexDirection:'column',gap:7}}>
@@ -1290,7 +1290,7 @@ function AnalyticsDonut({summary, drillKey, onDrill}: {
             <div>
               <div style={{color:'#e2e8f0',fontSize:'0.82em',fontWeight:drillKey===a.key?700:400}}>{a.label}</div>
               <div style={{color:'#64748b',fontSize:'0.72em'}}>
-                {a.count.toLocaleString('ru-RU')} шт · {Math.round(a.frac*100)}% · {(a.value/1000000).toFixed(1)} М₽
+                {num(a.count, '0')} шт · {Math.round(a.frac*100)}% · {(a.value/1000000).toFixed(1)} М₽
               </div>
             </div>
           </div>
@@ -1453,7 +1453,7 @@ function AnalyticsDrillList({drillKey, items, total, loading, onClose, onNavigat
   return (
     <div style={{marginTop:14,background:'#0f1e33',borderRadius:8,border:'1px solid #1e3a5f',overflow:'hidden'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 14px',background:'#0a1628',borderBottom:'1px solid #1e293b',flexWrap:'wrap',gap:8}}>
-        <span style={{color:'#e2e8f0',fontWeight:600,fontSize:'0.88em'}}>{label} — {total.toLocaleString('ru-RU')} позиций</span>
+        <span style={{color:'#e2e8f0',fontWeight:600,fontSize:'0.88em'}}>{label} — {num(total, '0')} позиций</span>
         <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
           <span style={{color:'#64748b',fontSize:'0.72em'}}>Сорт.:</span>
           <SortBtn k="value" label="Сумма₽"/><SortBtn k="qty" label="Ост."/>
@@ -1485,9 +1485,9 @@ function AnalyticsDrillList({drillKey, items, total, loading, onClose, onNavigat
                   <tr key={item.id} style={{borderBottom:'1px solid #1e293b',background:i%2===0?'rgba(255,255,255,.01)':undefined}}>
                     <td style={{padding:'5px 10px',color:'#cbd5e1',maxWidth:260,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}
                       title={item.item_name}>{item.item_name}</td>
-                    <td style={{padding:'5px 7px',textAlign:'right',color:'#94a3b8'}}>{item.qty.toLocaleString('ru-RU')}</td>
+                    <td style={{padding:'5px 7px',textAlign:'right',color:'#94a3b8'}}>{num(item.qty, '—')}</td>
                     <td style={{padding:'5px 7px',textAlign:'right',color:covColor,fontWeight:600}}>
-                      {item.coverage_days!==null ? item.coverage_days.toLocaleString('ru-RU') : '∞'}
+                      {item.coverage_days != null ? item.coverage_days.toLocaleString('ru-RU') : '∞'}
                     </td>
                     <td style={{padding:'5px 7px',textAlign:'right',color:dColor}}>
                       {item.days_since_last_sale!==null ? `${item.days_since_last_sale}д` : 'никогда'}

@@ -1,4 +1,8 @@
-const rawApiBase = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/$/, '');
+const rawApiBase = (
+  (typeof window !== 'undefined' && (window as any).BACKEND_URL) ||
+  import.meta.env.VITE_API_BASE_URL ||
+  ''
+).trim().replace(/\/$/, '');
 
 export const API_BASE_URL = rawApiBase;
 

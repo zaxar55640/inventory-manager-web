@@ -13,11 +13,18 @@ try {
     CREATE INDEX IF NOT EXISTS idx_cp_item_code ON catalog_products(item_code);
   `);
 } catch (_e) { /* tables may not exist yet */ }
-try { db.prepare('ALTER TABLE catalog_products ADD COLUMN article TEXT').run(); } catch (_e) {}
-try { db.prepare('ALTER TABLE catalog_products ADD COLUMN supplier_name TEXT').run(); } catch (_e) {}
+try { stmt('ALTER TABLE catalog_products ADD COLUMN article TEXT').run(); } catch (_e) {}
+try { stmt('ALTER TABLE catalog_products ADD COLUMN supplier_name TEXT').run(); } catch (_e) {}
 
 // Register JS toLowerCase so SQLite can do case-insensitive Cyrillic search
 db.function('jslower', (s) => (s == null ? null : String(s).toLowerCase()));
+
+// Prepared-statement cache — avoids re-compiling identical SQL on every request (~20ms each)
+const _stmtCache = new Map();
+const stmt = (sql) => {
+  if (!_stmtCache.has(sql)) _stmtCache.set(sql, db.prepare(sql));
+  return _stmtCache.get(sql);
+};
 
 const app = express();
 
@@ -35,7 +42,7 @@ app.get('/api/catalog2/item/:code/receipts', (req, res) => {
   const limit = Math.max(1, Math.min(100, Number(req.query.limit || 20)));
   if (!code) return res.json({rows: [], summary: null});
   try {
-    const rows = db.prepare(`
+    const rows = stmt(`
       SELECT
         receipt_date,
         receipt_number,
@@ -45,22 +52,22 @@ app.get('/api/catalog2/item/:code/receipts', (req, res) => {
         price,
         amount AS sum
       FROM catalog_receipts
-      WHERE TRIM(item_code) = TRIM(?)
+      WHERE item_code = ?
       ORDER BY date(receipt_date) DESC, id DESC
       LIMIT ?
     `).all(code, limit);
 
-    const summary = db.prepare(`
+    const summary = stmt(`
       SELECT
         COUNT(*) AS receipts_count,
         ROUND(SUM(COALESCE(qty, 0)), 2) AS total_qty,
         ROUND(AVG(NULLIF(price, 0)), 2) AS avg_price,
         MAX(date(receipt_date)) AS last_receipt_date,
         MAX(CASE WHEN date(receipt_date) = (
-          SELECT MAX(date(receipt_date)) FROM catalog_receipts WHERE TRIM(item_code) = TRIM(?)
+          SELECT MAX(date(receipt_date)) FROM catalog_receipts WHERE item_code = ?
         ) THEN price END) AS last_price
       FROM catalog_receipts
-      WHERE TRIM(item_code) = TRIM(?)
+      WHERE item_code = ?
     `).get(code, code);
 
     res.json({rows, summary});
@@ -79,11 +86,11 @@ try {
   db.exec(`ALTER TABLE purchase_order_items ADD COLUMN reason TEXT;`);
 } catch {}
 
-db.prepare("UPDATE purchase_order_batches SET is_draft = 0 WHERE status = 'completed'").run();
-try { db.prepare("DELETE FROM purchase_order_batches WHERE is_draft = 1").run(); } catch {}
+stmt("UPDATE purchase_order_batches SET is_draft = 0 WHERE status = 'completed'").run();
+try { stmt("DELETE FROM purchase_order_batches WHERE is_draft = 1").run(); } catch {}
 
 app.get('/api/suppliers', (_req, res) => {
-  const rows = db.prepare(`
+  const rows = stmt(`
     SELECT r.supplier_name,
            COUNT(*) AS items_count,
            ROUND(SUM(r.to_order), 2) AS total_to_order,
@@ -104,14 +111,14 @@ app.get('/api/suppliers', (_req, res) => {
 app.patch('/api/suppliers/:name/settings', (req, res) => {
   const name = req.params.name;
   const {lead_time_days, order_cycle_days, moq_qty} = req.body;
-  const sup = db.prepare('SELECT id FROM suppliers WHERE supplier_name = ?').get(name);
+  const sup = stmt('SELECT id FROM suppliers WHERE supplier_name = ?').get(name);
   if (!sup) return res.status(404).json({error: 'supplier not found'});
   if (lead_time_days != null)
-    db.prepare('UPDATE suppliers SET lead_time_days = ? WHERE supplier_name = ?').run(Number(lead_time_days), name);
+    stmt('UPDATE suppliers SET lead_time_days = ? WHERE supplier_name = ?').run(Number(lead_time_days), name);
   if (order_cycle_days != null)
-    db.prepare('UPDATE suppliers SET order_cycle_days = ? WHERE supplier_name = ?').run(Number(order_cycle_days), name);
+    stmt('UPDATE suppliers SET order_cycle_days = ? WHERE supplier_name = ?').run(Number(order_cycle_days), name);
   if (moq_qty != null)
-    db.prepare('UPDATE suppliers SET moq_qty = ? WHERE supplier_name = ?').run(moq_qty === '' ? null : Number(moq_qty), name);
+    stmt('UPDATE suppliers SET moq_qty = ? WHERE supplier_name = ?').run(moq_qty === '' ? null : Number(moq_qty), name);
   res.json({ok: true});
 });
 
@@ -176,7 +183,7 @@ const PR_SELECT = `
 
 app.get('/api/recommendations', (req, res) => {
   const supplier = String(req.query.supplier || '');
-  const rows = db.prepare(`
+  const rows = stmt(`
     ${PR_SELECT}
       ${prDedupSql('supplier_name = ? AND to_order > 0')}
     ) r
@@ -188,7 +195,7 @@ app.get('/api/recommendations', (req, res) => {
 app.get('/api/search', (req, res) => {
   const q = `%${String(req.query.q || '').trim()}%`;
   if (q === '%%') return res.json([]);
-  const rows = db.prepare(`
+  const rows = stmt(`
     ${PR_SELECT}
       ${prDedupSql('(sku_name LIKE ? OR norm_name LIKE ? OR item_ref LIKE ?)')}
     ) r
@@ -199,7 +206,9 @@ app.get('/api/search', (req, res) => {
 });
 
 app.get('/api/dashboard', (_req, res) => {
-  const stats = db.prepare(`
+  const cached = stmt(`SELECT value FROM _analytics_cache WHERE key='dashboard'`).get();
+  if (cached) return res.json(JSON.parse(cached.value));
+  const stats = stmt(`
     SELECT
       COUNT(CASE WHEN status IN ('urgent_order','order','pre_season_order','limited_history_manual_check') AND to_order > 0 THEN 1 END) AS total_to_order,
       COUNT(CASE WHEN status = 'urgent_order'     THEN 1 END) AS urgent_count,
@@ -213,7 +222,7 @@ app.get('/api/dashboard', (_req, res) => {
 });
 
 app.get('/api/decisions', (_req, res) => {
-  const rows = db.prepare(`
+  const rows = stmt(`
     SELECT md.decision_date, md.manager_name, md.sku_name, md.system_qty, md.manager_qty,
            md.delta_qty, md.reason, md.supplier_name
     FROM manager_decisions md
@@ -224,9 +233,9 @@ app.get('/api/decisions', (_req, res) => {
 });
 
 app.get('/api/non-liquid/groups', (_req, res) => {
-  const snapshotExists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='non_liquid_snapshot'`).get();
+  const snapshotExists = stmt(`SELECT name FROM sqlite_master WHERE type='table' AND name='non_liquid_snapshot'`).get();
   if (snapshotExists) {
-    const rows = db.prepare(`
+    const rows = stmt(`
       SELECT DISTINCT subgroup
       FROM non_liquid_snapshot
       WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM non_liquid_snapshot)
@@ -240,7 +249,7 @@ app.get('/api/non-liquid/groups', (_req, res) => {
   try {
     db.exec(`ALTER TABLE stock_snapshots ADD COLUMN subgroup_ref TEXT`);
   } catch {}
-  const rows = db.prepare(`
+  const rows = stmt(`
     SELECT DISTINCT COALESCE(NULLIF(subgroup, ''), NULLIF(subgroup_ref, ''), 'Без группы') AS subgroup
     FROM stock_snapshots
     WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM stock_snapshots)
@@ -312,10 +321,10 @@ app.get('/api/non-liquid', (req, res) => {
   const subgroup = String(req.query.subgroup || '').trim();
   const q = String(req.query.q || '').trim();
   const qLike = `%${q}%`;
-  const snapshotExists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='non_liquid_snapshot'`).get();
+  const snapshotExists = stmt(`SELECT name FROM sqlite_master WHERE type='table' AND name='non_liquid_snapshot'`).get();
 
   if (snapshotExists) {
-    const rows = db.prepare(`
+    const rows = stmt(`
       SELECT store, store_ref, item_ref, sku_name, norm_name, subgroup, available_qty, sales_qty_4m,
              last_sale_date, days_since_last_sale, is_seasonal, season_note, nlq_score
       FROM non_liquid_snapshot
@@ -330,7 +339,7 @@ app.get('/api/non-liquid', (req, res) => {
   ensureNonLiquidColumns();
   const baseSql = buildNonLiquidBaseSql();
   const params = [subgroup, subgroup, q, qLike, qLike, qLike];
-  const rows = db.prepare(`
+  const rows = stmt(`
     ${baseSql}
     ORDER BY COALESCE(days_since_last_sale, 99999) DESC, available_qty DESC
   `).all(...params);
@@ -345,7 +354,7 @@ app.get('/api/non-liquid-paged', (req, res) => {
   const offsetRaw = Number(req.query.offset || 0);
   const limit = Math.max(1, Math.min(500, Number.isFinite(limitRaw) ? limitRaw : 200));
   const offset = Math.max(0, Number.isFinite(offsetRaw) ? offsetRaw : 0);
-  const snapshotExists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='non_liquid_snapshot'`).get();
+  const snapshotExists = stmt(`SELECT name FROM sqlite_master WHERE type='table' AND name='non_liquid_snapshot'`).get();
 
   if (snapshotExists) {
     const whereSql = `
@@ -355,8 +364,8 @@ app.get('/api/non-liquid-paged', (req, res) => {
         AND (? = '' OR sku_name LIKE ? OR item_ref LIKE ? OR norm_name LIKE ?)
     `;
     const params = [subgroup, subgroup, q, qLike, qLike, qLike];
-    const total = db.prepare(`SELECT COUNT(*) AS total ${whereSql}`).get(...params).total;
-    const rows = db.prepare(`
+    const total = stmt(`SELECT COUNT(*) AS total ${whereSql}`).get(...params).total;
+    const rows = stmt(`
       SELECT store, store_ref, item_ref, sku_name, norm_name, subgroup, available_qty, sales_qty_4m,
              last_sale_date, days_since_last_sale, is_seasonal, season_note, nlq_score
       ${whereSql}
@@ -369,8 +378,8 @@ app.get('/api/non-liquid-paged', (req, res) => {
   ensureNonLiquidColumns();
   const baseSql = buildNonLiquidBaseSql();
   const params = [subgroup, subgroup, q, qLike, qLike, qLike];
-  const total = db.prepare(`SELECT COUNT(*) AS total FROM (${baseSql})`).get(...params).total;
-  const rows = db.prepare(`
+  const total = stmt(`SELECT COUNT(*) AS total FROM (${baseSql})`).get(...params).total;
+  const rows = stmt(`
     ${baseSql}
     ORDER BY COALESCE(days_since_last_sale, 99999) DESC, available_qty DESC
     LIMIT ? OFFSET ?
@@ -381,19 +390,19 @@ app.get('/api/non-liquid-paged', (req, res) => {
 app.post('/api/coverage/supplier', (req, res) => {
   const {supplier_name, coverage_days} = req.body;
   if (!supplier_name) return res.status(400).send('supplier_name required');
-  db.prepare('UPDATE suppliers SET coverage_days = ? WHERE supplier_name = ?').run(coverage_days ?? null, supplier_name);
+  stmt('UPDATE suppliers SET coverage_days = ? WHERE supplier_name = ?').run(coverage_days ?? null, supplier_name);
   res.json({ok: true});
 });
 
 app.post('/api/coverage/product', (req, res) => {
   const {norm_name, coverage_days} = req.body;
   if (!norm_name) return res.status(400).send('norm_name required');
-  db.prepare('UPDATE products SET coverage_days = ? WHERE norm_name = ?').run(coverage_days ?? null, norm_name);
+  stmt('UPDATE products SET coverage_days = ? WHERE norm_name = ?').run(coverage_days ?? null, norm_name);
   res.json({ok: true});
 });
 
 app.get('/api/drafts', (_req, res) => {
-  const rows = db.prepare(`
+  const rows = stmt(`
     SELECT b.id, b.supplier_name, b.status, b.created_at, b.draft_mode,
            COUNT(i.id) AS items_count,
            ROUND(SUM(COALESCE(i.final_qty, i.manager_qty, i.recommended_qty)), 2) AS total_qty
@@ -407,30 +416,30 @@ app.get('/api/drafts', (_req, res) => {
 });
 
 app.get('/api/drafts/latest', (_req, res) => {
-  const row = db.prepare(`SELECT id, supplier_name, status, created_at, draft_mode FROM purchase_order_batches WHERE is_draft = 1 ORDER BY id DESC LIMIT 1`).get();
+  const row = stmt(`SELECT id, supplier_name, status, created_at, draft_mode FROM purchase_order_batches WHERE is_draft = 1 ORDER BY id DESC LIMIT 1`).get();
   res.json(row || null);
 });
 
 app.post('/api/drafts', (req, res) => {
   const {draft_mode, batch_name} = req.body;
-  const result = db.prepare(`INSERT INTO purchase_order_batches (batch_date, supplier_name, batch_name, status, draft_mode, is_draft) VALUES (date(), '', ?, 'draft', ?, 1)`).run(batch_name || '', draft_mode || 'single');
+  const result = stmt(`INSERT INTO purchase_order_batches (batch_date, supplier_name, batch_name, status, draft_mode, is_draft) VALUES (date(), '', ?, 'draft', ?, 1)`).run(batch_name || '', draft_mode || 'single');
   res.json({id: result.lastInsertRowid});
 });
 
 app.get('/api/drafts/:id', (req, res) => {
-  const batch = db.prepare(`SELECT id, supplier_name, status, created_at, draft_mode FROM purchase_order_batches WHERE id = ?`).get(req.params.id);
-  const items = db.prepare(`SELECT id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, reason FROM purchase_order_items WHERE batch_id = ? ORDER BY id DESC`).all(req.params.id);
+  const batch = stmt(`SELECT id, supplier_name, status, created_at, draft_mode FROM purchase_order_batches WHERE id = ?`).get(req.params.id);
+  const items = stmt(`SELECT id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, reason FROM purchase_order_items WHERE batch_id = ? ORDER BY id DESC`).all(req.params.id);
   res.json({batch, items});
 });
 
 app.post('/api/drafts/:id/items', (req, res) => {
   const {item} = req.body;
-  const rec = db.prepare(`SELECT id, item_ref, sku_name, norm_name, to_order FROM purchase_recommendations WHERE id = ?`).get(item.recommendation_id);
+  const rec = stmt(`SELECT id, item_ref, sku_name, norm_name, to_order FROM purchase_recommendations WHERE id = ?`).get(item.recommendation_id);
   if (!rec) return res.status(404).send('recommendation not found');
-  const exists = db.prepare(`SELECT id FROM purchase_order_items WHERE batch_id = ? AND recommendation_id = ?`).get(req.params.id, item.recommendation_id);
+  const exists = stmt(`SELECT id FROM purchase_order_items WHERE batch_id = ? AND recommendation_id = ?`).get(req.params.id, item.recommendation_id);
   if (exists) return res.json({ok: true, existing: true});
-  db.prepare(`UPDATE purchase_order_batches SET supplier_name = CASE WHEN supplier_name = '' THEN ? ELSE supplier_name END WHERE id = ?`).run(item.supplier_name || '', req.params.id);
-  db.prepare(`INSERT INTO purchase_order_items (batch_id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, item_status, reason)
+  stmt(`UPDATE purchase_order_batches SET supplier_name = CASE WHEN supplier_name = '' THEN ? ELSE supplier_name END WHERE id = ?`).run(item.supplier_name || '', req.params.id);
+  stmt(`INSERT INTO purchase_order_items (batch_id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, item_status, reason)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)`)
     .run(req.params.id, rec.id, rec.item_ref, rec.sku_name, rec.norm_name, rec.to_order, item.manager_qty ?? rec.to_order, item.manager_qty ?? rec.to_order, item.reason || '');
   res.json({ok: true});
@@ -438,12 +447,12 @@ app.post('/api/drafts/:id/items', (req, res) => {
 
 app.post('/api/drafts/:id/items/:itemId', (req, res) => {
   const {manager_qty, reason} = req.body;
-  db.prepare(`UPDATE purchase_order_items SET manager_qty = ?, final_qty = ?, reason = ? WHERE id = ? AND batch_id = ?`).run(manager_qty, manager_qty, reason || '', req.params.itemId, req.params.id);
+  stmt(`UPDATE purchase_order_items SET manager_qty = ?, final_qty = ?, reason = ? WHERE id = ? AND batch_id = ?`).run(manager_qty, manager_qty, reason || '', req.params.itemId, req.params.id);
   res.json({ok: true});
 });
 
 app.delete('/api/drafts/:id/items/:itemId', (req, res) => {
-  db.prepare(`DELETE FROM purchase_order_items WHERE id = ? AND batch_id = ?`).run(req.params.itemId, req.params.id);
+  stmt(`DELETE FROM purchase_order_items WHERE id = ? AND batch_id = ?`).run(req.params.itemId, req.params.id);
   res.json({ok: true});
 });
 
@@ -451,21 +460,21 @@ app.delete('/api/drafts/:id/items/:itemId', (req, res) => {
 app.post('/api/drafts/:id/catalog-items', (req, res) => {
   const {item} = req.body;
   if (!item || !item.item_ref) return res.status(400).json({error: 'item_ref required'});
-  const existing = db.prepare(`SELECT id FROM purchase_order_items WHERE batch_id = ? AND item_ref = ? AND recommendation_id IS NULL`).get(req.params.id, item.item_ref);
+  const existing = stmt(`SELECT id FROM purchase_order_items WHERE batch_id = ? AND item_ref = ? AND recommendation_id IS NULL`).get(req.params.id, item.item_ref);
   if (existing) {
-    db.prepare(`UPDATE purchase_order_items SET manager_qty = ?, final_qty = ? WHERE id = ?`).run(item.manager_qty || 1, item.manager_qty || 1, existing.id);
+    stmt(`UPDATE purchase_order_items SET manager_qty = ?, final_qty = ? WHERE id = ?`).run(item.manager_qty || 1, item.manager_qty || 1, existing.id);
     return res.json({ok: true, existing: true, id: existing.id});
   }
-  const result = db.prepare(`INSERT INTO purchase_order_items (batch_id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, item_status, reason) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'draft', ?)`)
+  const result = stmt(`INSERT INTO purchase_order_items (batch_id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, item_status, reason) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'draft', ?)`)
     .run(req.params.id, item.item_ref, item.sku_name || '', item.norm_name || '', item.recommended_qty || 0, item.manager_qty || 1, item.manager_qty || 1, item.reason || '');
   res.json({ok: true, id: result.lastInsertRowid});
 });
 
 // Ensure batch_name column exists
-try { db.prepare('ALTER TABLE purchase_order_batches ADD COLUMN batch_name TEXT').run(); } catch {}
+try { stmt('ALTER TABLE purchase_order_batches ADD COLUMN batch_name TEXT').run(); } catch {}
 
 app.get('/api/orders', (_req, res) => {
-  const rows = db.prepare(`
+  const rows = stmt(`
     SELECT b.id, COALESCE(b.batch_name, b.supplier_name, '') AS batch_name,
            b.supplier_name, b.status, b.created_at,
            COUNT(i.id) AS items_count,
@@ -480,13 +489,12 @@ app.get('/api/orders', (_req, res) => {
 });
 
 app.get('/api/orders/:id', (req, res) => {
-  const batch = db.prepare(`SELECT id, COALESCE(batch_name,'') AS batch_name, supplier_name, status, created_at FROM purchase_order_batches WHERE id = ?`).get(req.params.id);
-  const items = db.prepare(`
+  const batch = stmt(`SELECT id, COALESCE(batch_name,'') AS batch_name, supplier_name, status, created_at FROM purchase_order_batches WHERE id = ?`).get(req.params.id);
+  const items = stmt(`
     SELECT i.id, i.sku_name, i.item_ref, i.recommended_qty, i.manager_qty, i.final_qty, i.reason, i.item_status,
            COALESCE(r.supplier_name,
              (SELECT pr.supplier_name FROM purchase_recommendations pr
-              JOIN catalog_products cp ON cp.item_name = pr.item_ref
-              WHERE cp.item_code = i.item_ref LIMIT 1)
+              WHERE pr.item_ref = i.item_ref LIMIT 1)
            ) AS supplier_name,
            (SELECT cp2.article FROM catalog_products cp2 WHERE cp2.item_code = i.item_ref LIMIT 1) AS article
     FROM purchase_order_items i
@@ -498,22 +506,22 @@ app.get('/api/orders/:id', (req, res) => {
 
 app.post('/api/drafts/:id/submit', (req, res) => {
   const batchId = req.params.id;
-  const items = db.prepare(`SELECT i.*, r.supplier_name, r.store, r.item_ref AS rec_item_ref, r.sku_name AS rec_sku_name, r.norm_name, r.to_order
+  const items = stmt(`SELECT i.*, r.supplier_name, r.store, r.item_ref AS rec_item_ref, r.sku_name AS rec_sku_name, r.norm_name, r.to_order
                             FROM purchase_order_items i
                             LEFT JOIN purchase_recommendations r ON r.id = i.recommendation_id
                             WHERE i.batch_id = ?`).all(batchId);
   for (const item of items) {
-    db.prepare(`INSERT INTO manager_decisions (decision_date, recommendation_id, supplier_name, store, item_ref, sku_name, norm_name, system_qty, manager_qty, delta_qty, reason, manager_name)
+    stmt(`INSERT INTO manager_decisions (decision_date, recommendation_id, supplier_name, store, item_ref, sku_name, norm_name, system_qty, manager_qty, delta_qty, reason, manager_name)
                 VALUES (date(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manager')`)
       .run(item.recommendation_id, item.supplier_name || '', item.store || '', item.rec_item_ref || item.item_ref || '', item.rec_sku_name || item.sku_name, item.norm_name || '', item.recommended_qty || item.to_order || 0, item.manager_qty || 0, (item.manager_qty || 0) - (item.recommended_qty || item.to_order || 0), item.reason || '');
   }
-  db.prepare(`UPDATE purchase_order_batches SET is_draft = 0, supplier_name = COALESCE(NULLIF(supplier_name,''), 'multi-supplier') WHERE id = ?`).run(batchId);
+  stmt(`UPDATE purchase_order_batches SET is_draft = 0, supplier_name = COALESCE(NULLIF(supplier_name,''), 'multi-supplier') WHERE id = ?`).run(batchId);
   res.json({ok: true});
 });
 
 app.post('/api/orders/:id/complete', (req, res) => {
-  db.prepare("UPDATE purchase_order_batches SET status = 'completed' WHERE id = ?").run(req.params.id);
-  db.prepare("UPDATE purchase_order_items SET item_status = 'completed' WHERE batch_id = ?").run(req.params.id);
+  stmt("UPDATE purchase_order_batches SET status = 'completed' WHERE id = ?").run(req.params.id);
+  stmt("UPDATE purchase_order_items SET item_status = 'completed' WHERE batch_id = ?").run(req.params.id);
   res.json({ok: true});
 });
 
@@ -578,8 +586,8 @@ app.get('/api/products-catalog', (req, res) => {
   `;
 
   try {
-    const total = db.prepare(`SELECT COUNT(*) AS total ${baseSql}`).get(...params).total;
-    const rows  = db.prepare(`
+    const total = stmt(`SELECT COUNT(*) AS total ${baseSql}`).get(...params).total;
+    const rows  = stmt(`
       SELECT r.sku_name, r.item_ref, p.barcode,
              ss.subgroup,
              r.available_qty,
@@ -603,7 +611,7 @@ app.get('/api/products-catalog', (req, res) => {
 
 app.get('/api/products-catalog/groups', (_req, res) => {
   try {
-    const rows = db.prepare(`
+    const rows = stmt(`
       SELECT DISTINCT COALESCE(NULLIF(subgroup,''), NULLIF(subgroup_ref,''), 'Без группы') AS subgroup
       FROM stock_snapshots
       WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM stock_snapshots)
@@ -639,7 +647,7 @@ app.get('/api/catalog2/children', (req, res) => {
     const { where: pw, params: pp } = catalogPathWhere(pathParts);
     const baseWhere = pw ? `${pw} AND ${childCol} IS NOT NULL` : `${childCol} IS NOT NULL`;
 
-    const children = db.prepare(`
+    const children = stmt(`
       SELECT ${childCol} AS name, COUNT(*) AS item_count
       FROM catalog_products
       WHERE ${baseWhere}
@@ -649,7 +657,7 @@ app.get('/api/catalog2/children', (req, res) => {
 
     // Count direct items (leaves) exactly at this path depth
     const directWhere = pw ? `${pw} AND group_depth = ${depth}` : `group_depth = ${depth}`;
-    const direct = db.prepare(`SELECT COUNT(*) AS cnt FROM catalog_products WHERE ${directWhere}`).get(...pp);
+    const direct = stmt(`SELECT COUNT(*) AS cnt FROM catalog_products WHERE ${directWhere}`).get(...pp);
 
     res.json({ children, direct_items: direct?.cnt ?? 0 });
   } catch (err) {
@@ -703,31 +711,27 @@ app.get('/api/catalog2/items', (req, res) => {
       conditions.push('cp.qty > 0');
     }
     if (req.query.supplier) {
-      conditions.push('cp.item_name IN (SELECT item_ref FROM purchase_recommendations WHERE supplier_name = ?)');
+      conditions.push('cp.item_code IN (SELECT item_ref FROM purchase_recommendations WHERE supplier_name = ?)');
       params.push(String(req.query.supplier));
     }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
-    const total = db.prepare(`SELECT COUNT(*) AS cnt FROM catalog_products cp ${where}`).get(...params).cnt;
-    const items = db.prepare(`
+    const total = stmt(`SELECT COUNT(*) AS cnt FROM catalog_products cp ${where}`).get(...params).cnt;
+    const items = stmt(`
       SELECT cp.id, cp.item_code, cp.item_name, cp.barcode, cp.article, cp.qty, cp.reserve,
              cp.retail_price, cp.purchase_price, cp.parent_name, cp.variant,
              cp.group_l0, cp.group_l1, cp.group_l2, cp.group_l3, cp.group_l4,
              cp.group_l5, cp.group_l6, cp.group_l7, cp.group_l8,
              cp.group_depth, cp.group_full_path,
              ls.last_sale_date,
-             CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) AS days_since_last_sale,
+             ls.days_since_last_sale,
              cf.abc_class, cf.xyz_class, cf.forecast_day_matrix, cf.to_order AS forecast_to_order,
              cf.demand_mode AS forecast_mode, cf.w_forecast_final,
              cf.oos_days_365, cf.oos_fraction,
-             (SELECT pr.supplier_name FROM purchase_recommendations pr WHERE pr.item_ref = cp.item_name LIMIT 1) AS supplier_name
+             (SELECT pr.supplier_name FROM purchase_recommendations pr WHERE pr.item_ref = cp.item_code LIMIT 1) AS supplier_name
       FROM catalog_products cp
-      LEFT JOIN (
-        SELECT item_code, MAX(sale_date) AS last_sale_date
-        FROM catalog_sales
-        GROUP BY item_code
-      ) ls ON ls.item_code = cp.item_code
+      LEFT JOIN _sales_cache ls ON ls.item_code = cp.item_code
       LEFT JOIN catalog_forecast cf ON cf.item_code = cp.item_code
       ${where}
       ORDER BY ${orderClauses.join(', ')}
@@ -744,11 +748,11 @@ app.get('/api/catalog2/items', (req, res) => {
 // Search group names across all hierarchy levels
 app.get('/api/catalog2/suppliers', (_req, res) => {
   try {
-    const rows = db.prepare(`
+    const rows = stmt(`
       SELECT DISTINCT pr.supplier_name
       FROM purchase_recommendations pr
-      JOIN catalog_products cp ON cp.item_name = pr.item_ref
       WHERE pr.supplier_name IS NOT NULL AND pr.supplier_name != '' AND pr.supplier_name != 'UNMAPPED_SUPPLIER'
+        AND pr.calc_date = (SELECT MAX(calc_date) FROM purchase_recommendations)
       ORDER BY pr.supplier_name
     `).all();
     res.json(rows.map(r => r.supplier_name));
@@ -766,7 +770,7 @@ app.get('/api/catalog2/search-groups', (req, res) => {
       const col = `group_l${level}`;
       const selectCols = Array.from({length: level + 1}, (_, i) => `group_l${i}`).join(', ');
       const wordConds = words.map(() => `jslower(${col}) LIKE ?`).join(' AND ');
-      const rows = db.prepare(`
+      const rows = stmt(`
         SELECT ${selectCols}, COUNT(*) AS item_count
         FROM catalog_products
         WHERE (${wordConds}) AND ${col} IS NOT NULL
@@ -801,8 +805,41 @@ app.get('/api/catalog2/analytics', (req, res) => {
       params.push(...pp);
     }
     if (req.query.supplier) {
-      conditions.push('cp.item_name IN (SELECT item_ref FROM purchase_recommendations WHERE supplier_name = ?)');
+      conditions.push('cp.item_code IN (SELECT item_ref FROM purchase_recommendations WHERE supplier_name = ?)');
       params.push(String(req.query.supplier));
+    }
+
+    // Fast path: serve pre-computed cache for the default no-filter all-scope request
+    if (!conditions.length && scope === 'all') {
+      const cached = stmt(`SELECT value FROM _analytics_cache WHERE key='analytics_all'`).get();
+      if (cached) {
+        const data = JSON.parse(cached.value);
+        const ov = data.overview;
+        const segs = data.segments;
+        ov.coverage_days = Number(ov.total_sales_qty_30 || 0) > 0
+          ? Math.round(Number(ov.qty_total || 0) / (Number(ov.total_sales_qty_30 || 0) / 30)) : null;
+        const totalSku = Number(ov.total_sku || 0);
+        ov.active_share = totalSku ? Math.round((Number(ov.active_sku || 0) / totalSku) * 100) : 0;
+        ov.no_sales_share = totalSku ? Math.round((Number(ov.no_sales_sku || 0) / totalSku) * 100) : 0;
+        ov.dead_stock_share = totalSku ? Math.round((Number(ov.dead_stock_sku || 0) / totalSku) * 100) : 0;
+        const enriched = segs.map(r => {
+          const coverage = Number(r.sales_qty_30 || 0) > 0 ? Math.round(Number(r.qty_total || 0) / (Number(r.sales_qty_30 || 0) / 30)) : null;
+          let healthy_status = 'healthy', alert = null;
+          if (coverage !== null && coverage < 21 && Number(r.sales_qty_30 || 0) > 0) { healthy_status = 'deficit'; alert = 'Низкое покрытие'; }
+          else if (coverage !== null && coverage > 180 && Number(r.sales_qty_30 || 0) < Number(r.sales_qty_365 || 0) / 12) { healthy_status = 'overstock'; alert = 'Избыточный запас'; }
+          else if (Number(r.dead_stock_sku || 0) > Math.max(3, Math.round(Number(r.sku_count || 0) * 0.3))) { healthy_status = 'dead'; alert = 'Много мёртвых SKU'; }
+          return { ...r, level: 'group', coverage_days: coverage, healthy_status, alert };
+        });
+        const overstock = [...enriched].filter(s => s.coverage_days != null && s.coverage_days > 180).sort((a,b) => (b.coverage_days||0)-(a.coverage_days||0)).slice(0,5);
+        const dead = [...enriched].filter(s => Number(s.dead_stock_sku||0) > 0).sort((a,b) => Number(b.dead_stock_sku||0)-Number(a.dead_stock_sku||0)).slice(0,5);
+        const deficit = [...enriched].filter(s => s.coverage_days != null && s.coverage_days < 21 && Number(s.sales_qty_30||0) > 0).sort((a,b) => Number(b.sales_qty_30||0)-Number(a.sales_qty_30||0)).slice(0,5);
+        const recommendations = [];
+        if (dead.length) recommendations.push({ title: 'Почистить зависшие сегменты', text: `Проверь ${dead[0].name} и соседние блоки: там заметная доля SKU без движения и замороженный капитал.`, severity: 'high' });
+        if (deficit.length) recommendations.push({ title: 'Усилить наличие лидеров', text: `Сегмент ${deficit[0].name} продаётся быстро, но покрытие низкое. Это прямой кандидат на усиление закупки.`, severity: 'high' });
+        if (overstock.length) recommendations.push({ title: 'Сжать хвост ассортимента', text: `В ${overstock[0].name} запас живёт слишком долго. Стоит пересмотреть ширину матрицы и глубину закупки.`, severity: 'medium' });
+        recommendations.push({ title: 'Смотреть сверху вниз', text: 'Используй эту страницу как верхний слой решений: сначала ассортимент целиком, потом группа, потом подгруппа, и только потом конкретные SKU.', severity: 'low' });
+        return res.json({ overview: ov, segments: enriched, problem_zones: { overstock, dead_stock: dead, deficit }, recommendations });
+      }
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -813,7 +850,7 @@ app.get('/api/catalog2/analytics', (req, res) => {
       ? `COALESCE(cp.group_full_path, cp.parent_name, 'Без пути')`
       : `COALESCE(cp.group_l0 || ' / ' || cp.group_l1, cp.group_full_path, cp.parent_name, 'Без пути')`;
 
-    const overview = db.prepare(`
+    const overview = stmt(`
       SELECT
         COUNT(*) AS total_sku,
         SUM(CASE WHEN IFNULL(ls.days_since_last_sale, 9999) <= 90 THEN 1 ELSE 0 END) AS active_sku,
@@ -822,21 +859,10 @@ app.get('/api/catalog2/analytics', (req, res) => {
         ROUND(SUM(IFNULL(cp.qty,0)), 1) AS qty_total,
         ROUND(SUM(IFNULL(cp.qty,0) * IFNULL(cp.retail_price,0)), 1) AS stock_value_retail,
         ROUND(SUM(IFNULL(cp.qty,0) * IFNULL(cp.purchase_price,0)), 1) AS stock_value_purchase,
-        ROUND(SUM(IFNULL(s30.sales_30,0)), 1) AS total_sales_qty_30,
-        ROUND(SUM(IFNULL(s365.sales_365,0)), 1) AS total_sales_qty_365
+        ROUND(SUM(IFNULL(ls.sales_30,0)), 1) AS total_sales_qty_30,
+        ROUND(SUM(IFNULL(ls.sales_365,0)), 1) AS total_sales_qty_365
       FROM catalog_products cp
-      LEFT JOIN (
-        SELECT item_code, CAST(julianday('now') - julianday(MAX(sale_date)) AS INTEGER) AS days_since_last_sale
-        FROM catalog_sales GROUP BY item_code
-      ) ls ON ls.item_code = cp.item_code
-      LEFT JOIN (
-        SELECT item_code, SUM(sales_qty - return_qty) AS sales_30
-        FROM catalog_sales WHERE sale_date >= date('now', '-30 days') GROUP BY item_code
-      ) s30 ON s30.item_code = cp.item_code
-      LEFT JOIN (
-        SELECT item_code, SUM(sales_qty - return_qty) AS sales_365
-        FROM catalog_sales WHERE sale_date >= date('now', '-365 days') GROUP BY item_code
-      ) s365 ON s365.item_code = cp.item_code
+      LEFT JOIN _sales_cache ls ON ls.item_code = cp.item_code
       ${where}
     `).get(...params);
 
@@ -848,7 +874,7 @@ app.get('/api/catalog2/analytics', (req, res) => {
     overview.no_sales_share = totalSku ? Math.round((Number(overview.no_sales_sku || 0) / totalSku) * 100) : 0;
     overview.dead_stock_share = totalSku ? Math.round((Number(overview.dead_stock_sku || 0) / totalSku) * 100) : 0;
 
-    const segments = db.prepare(`
+    const segments = stmt(`
       SELECT
         ${levelCol} AS name,
         ${pathExpr} AS path,
@@ -859,22 +885,11 @@ app.get('/api/catalog2/analytics', (req, res) => {
         ROUND(SUM(IFNULL(cp.qty,0)), 1) AS qty_total,
         ROUND(SUM(IFNULL(cp.qty,0) * IFNULL(cp.purchase_price,0)), 1) AS stock_value_purchase,
         ROUND(SUM(IFNULL(cp.qty,0) * IFNULL(cp.retail_price,0)), 1) AS stock_value_retail,
-        ROUND(SUM(IFNULL(s30.sales_30,0)), 1) AS sales_qty_30,
-        ROUND(SUM(IFNULL(s365.sales_365,0)), 1) AS sales_qty_365,
+        ROUND(SUM(IFNULL(ls.sales_30,0)), 1) AS sales_qty_30,
+        ROUND(SUM(IFNULL(ls.sales_365,0)), 1) AS sales_qty_365,
         ROUND(AVG(IFNULL(ls.days_since_last_sale, 9999)), 0) AS avg_days_since_last_sale
       FROM catalog_products cp
-      LEFT JOIN (
-        SELECT item_code, CAST(julianday('now') - julianday(MAX(sale_date)) AS INTEGER) AS days_since_last_sale
-        FROM catalog_sales GROUP BY item_code
-      ) ls ON ls.item_code = cp.item_code
-      LEFT JOIN (
-        SELECT item_code, SUM(sales_qty - return_qty) AS sales_30
-        FROM catalog_sales WHERE sale_date >= date('now', '-30 days') GROUP BY item_code
-      ) s30 ON s30.item_code = cp.item_code
-      LEFT JOIN (
-        SELECT item_code, SUM(sales_qty - return_qty) AS sales_365
-        FROM catalog_sales WHERE sale_date >= date('now', '-365 days') GROUP BY item_code
-      ) s365 ON s365.item_code = cp.item_code
+      LEFT JOIN _sales_cache ls ON ls.item_code = cp.item_code
       ${where}
       GROUP BY name, path
       HAVING name IS NOT NULL AND TRIM(name) <> ''
@@ -915,7 +930,7 @@ app.get('/api/catalog2/analytics', (req, res) => {
 app.get('/api/catalog2/item/:code/forecast', (req, res) => {
   try {
     const code = req.params.code.trim();
-    const row = db.prepare('SELECT * FROM catalog_forecast WHERE item_code = ?').get(code);
+    const row = stmt('SELECT * FROM catalog_forecast WHERE item_code = ?').get(code);
     if (!row) {
       return res.json({
         item_code: code,
@@ -934,7 +949,7 @@ app.get('/api/catalog2/item/:code/forecast', (req, res) => {
       : row.avg_day_365;
     const threshold = salesDayMean + 3 * row.std_day_no_anom;
     if (threshold > 0 && row.observed_days_365 >= 5) {
-      row.anomaly_dates = db.prepare(`
+      row.anomaly_dates = stmt(`
         SELECT sale_date,
                ROUND(MAX(0.0, SUM(CAST(sales_qty AS REAL) - CAST(return_qty AS REAL))), 1) AS net_qty
         FROM catalog_sales
@@ -957,8 +972,8 @@ app.get('/api/catalog2/item/:code/forecast', (req, res) => {
 app.get('/api/catalog2/item/:code', (req, res) => {
   try {
     const code = req.params.code;
-    const row = db.prepare(`SELECT * FROM catalog_products WHERE item_code = ? LIMIT 1`).get(code)
-             || db.prepare(`SELECT * FROM catalog_products WHERE id = ? LIMIT 1`).get(code);
+    const row = stmt(`SELECT * FROM catalog_products WHERE item_code = ? LIMIT 1`).get(code)
+             || stmt(`SELECT * FROM catalog_products WHERE id = ? LIMIT 1`).get(code);
     if (!row) return res.status(404).json({ error: 'not found' });
     res.json(row);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -994,7 +1009,7 @@ app.get('/api/catalog2/item/:code/sales', (req, res) => {
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}`;
     }
 
-    const salesRows = db.prepare(`
+    const salesRows = stmt(`
       SELECT sale_date AS day,
              SUM(COALESCE(sales_qty,0))  AS sales,
              SUM(COALESCE(return_qty,0)) AS returns
@@ -1004,19 +1019,19 @@ app.get('/api/catalog2/item/:code/sales', (req, res) => {
       ORDER BY sale_date ASC
     `).all(code, from, to);
 
-    const receiptRows = db.prepare(`
+    const receiptRows = stmt(`
       SELECT receipt_date AS day,
              SUM(COALESCE(qty,0)) AS receipts
       FROM catalog_receipts
-      WHERE TRIM(item_code) = TRIM(?) AND receipt_date >= ? AND receipt_date <= ?
+      WHERE item_code = ? AND receipt_date >= ? AND receipt_date <= ?
       GROUP BY receipt_date
       ORDER BY receipt_date ASC
     `).all(code, from, to);
 
-    const currentStockRow = db.prepare(`
+    const currentStockRow = stmt(`
       SELECT COALESCE(qty, 0) AS qty
       FROM catalog_products
-      WHERE TRIM(item_code) = TRIM(?)
+      WHERE item_code = ?
       LIMIT 1
     `).get(code);
     const currentStock = Number(currentStockRow?.qty || 0);
@@ -1078,7 +1093,7 @@ app.post('/api/catalog2/sales', (req, res) => {
   try {
     const records = req.body;
     if (!Array.isArray(records)) return res.status(400).json({ error: 'body must be array' });
-    const insert = db.prepare(`
+    const insert = stmt(`
       INSERT INTO catalog_sales (sale_date, store, item_code, sales_qty, return_qty)
       VALUES (?, ?, ?, ?, ?)
     `);
@@ -1099,59 +1114,65 @@ app.get('/api/analytics/summary', (req, res) => {
   try {
     const pathStr = String(req.query.path || '');
     const pathParts = pathStr ? pathStr.split(' / ') : [];
+
+    // Fast path: serve pre-computed cache when no path filter
+    if (!pathParts.length) {
+      const cached = stmt(`SELECT value FROM _analytics_cache WHERE key='summary'`).get();
+      if (cached) return res.json(JSON.parse(cached.value));
+    }
+
     const { where: pw, params: pp } = catalogPathWhere(pathParts);
     const cpFilter = pw ? `AND ${pw}` : '';
 
-    const rows = db.prepare(`
-      SELECT cp.item_code,
-             CAST(cp.qty AS REAL) AS qty,
-             CAST(cp.purchase_price AS REAL) AS purchase_price,
-             cf.forecast_day_matrix,
-             cf.to_order AS forecast_to_order,
-             cf.peak_months,
-             CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) AS days_since_last_sale
+    const agg = stmt(`
+      SELECT
+        SUM(CASE WHEN is_nlq=0 AND is_over=0 THEN 1 ELSE 0 END) AS normal_cnt,
+        SUM(CASE WHEN is_nlq=0 AND is_over=1 THEN 1 ELSE 0 END) AS over_cnt,
+        SUM(CASE WHEN is_nlq=1 AND is_over=0 THEN 1 ELSE 0 END) AS nlq_cnt,
+        SUM(CASE WHEN is_nlq=1 AND is_over=1 THEN 1 ELSE 0 END) AS both_cnt,
+        SUM(CASE WHEN is_nlq=0 AND is_over=0 THEN val ELSE 0 END) AS normal_val,
+        SUM(CASE WHEN is_nlq=0 AND is_over=1 THEN val ELSE 0 END) AS over_val,
+        SUM(CASE WHEN is_nlq=1 AND is_over=0 THEN val ELSE 0 END) AS nlq_val,
+        SUM(CASE WHEN is_nlq=1 AND is_over=1 THEN val ELSE 0 END) AS both_val
+      FROM (
+        SELECT
+          CASE WHEN IFNULL(ls.days_since_last_sale, 9999) > ${NLQ_DAYS} THEN 1 ELSE 0 END AS is_nlq,
+          CASE WHEN IFNULL(cf.forecast_day_matrix,0)>0 AND cp.qty>1
+                    AND cp.qty/cf.forecast_day_matrix>${OVERSTOCK_DAYS} THEN 1 ELSE 0 END AS is_over,
+          cp.qty * IFNULL(cp.purchase_price,0) AS val
+        FROM catalog_products cp
+        LEFT JOIN catalog_forecast cf ON cf.item_code = cp.item_code
+        LEFT JOIN _sales_cache ls ON ls.item_code = cp.item_code
+        WHERE cp.qty > 0 ${cpFilter}
+      )
+    `).get(...pp);
+
+    // pre_season needs JSON parsing — only fetch items that have forecast_to_order > 0
+    const curM = new Date().getMonth() + 1;
+    const preSeasonRows = stmt(`
+      SELECT cf.peak_months
       FROM catalog_products cp
-      LEFT JOIN catalog_forecast cf ON cf.item_code = cp.item_code
-      LEFT JOIN (
-        SELECT item_code, MAX(sale_date) AS last_sale_date
-        FROM catalog_sales GROUP BY item_code
-      ) ls ON ls.item_code = cp.item_code
-      WHERE cp.qty > 0 ${cpFilter}
+      JOIN catalog_forecast cf ON cf.item_code = cp.item_code
+      WHERE cp.qty > 0 AND cf.to_order > 0 AND cf.peak_months IS NOT NULL ${cpFilter}
     `).all(...pp);
-
-    const now = new Date();
-    const curM = now.getMonth() + 1;
-    let normal = 0, overstockOnly = 0, nlqOnly = 0, both = 0;
-    let normalVal = 0, overstockVal = 0, nlqVal = 0, bothVal = 0;
     let preSeasonCount = 0;
-
-    for (const row of rows) {
-      const rate = row.forecast_day_matrix || 0;
-      const isOverstock = rate > 0 && row.qty > 1 && (row.qty / rate) > OVERSTOCK_DAYS;
-      const isNlq = row.days_since_last_sale === null || row.days_since_last_sale > NLQ_DAYS;
-      const val = row.qty * (row.purchase_price || 0);
-
-      if (isOverstock && isNlq)   { both++;          bothVal     += val; }
-      else if (isOverstock)       { overstockOnly++;  overstockVal += val; }
-      else if (isNlq)             { nlqOnly++;        nlqVal      += val; }
-      else                        { normal++;         normalVal   += val; }
-
-      let peakMonths = [];
-      try { peakMonths = JSON.parse(row.peak_months || '[]'); } catch {}
-      const upcoming = peakMonths.some(m => { const d = ((m - curM + 12) % 12); return d >= 1 && d <= 3; });
-      if (upcoming && (row.forecast_to_order || 0) > 0) preSeasonCount++;
+    for (const r of preSeasonRows) {
+      try {
+        const pm = JSON.parse(r.peak_months);
+        if (pm.some(m => { const d = ((m - curM + 12) % 12); return d >= 1 && d <= 3; })) preSeasonCount++;
+      } catch {}
     }
 
     res.json({
       segments: {
-        normal:        { count: normal,        value: Math.round(normalVal)    },
-        overstock_only:{ count: overstockOnly,  value: Math.round(overstockVal) },
-        nlq_only:      { count: nlqOnly,        value: Math.round(nlqVal)       },
-        both:          { count: both,           value: Math.round(bothVal)      },
+        normal:        { count: agg.normal_cnt, value: Math.round(agg.normal_val) },
+        overstock_only:{ count: agg.over_cnt,   value: Math.round(agg.over_val)   },
+        nlq_only:      { count: agg.nlq_cnt,    value: Math.round(agg.nlq_val)    },
+        both:          { count: agg.both_cnt,   value: Math.round(agg.both_val)   },
       },
       pre_season_count: preSeasonCount,
-      total_with_stock: normal + overstockOnly + nlqOnly + both,
-      total_stock_value: Math.round(normalVal + overstockVal + nlqVal + bothVal),
+      total_with_stock: agg.normal_cnt + agg.over_cnt + agg.nlq_cnt + agg.both_cnt,
+      total_stock_value: Math.round(agg.normal_val + agg.over_val + agg.nlq_val + agg.both_val),
     });
   } catch (err) {
     console.error('/api/analytics/summary', err.message);
@@ -1166,18 +1187,23 @@ app.get('/api/analytics/sales-by-year', (req, res) => {
     const { where: pw, params: pp } = catalogPathWhere(pathParts);
     const cpFilter = pw ? `AND ${pw}` : '';
 
-    const rows = db.prepare(`
-      SELECT CAST(strftime('%Y', cs.sale_date) AS INTEGER) AS year,
-             CAST(strftime('%m', cs.sale_date) AS INTEGER) AS month,
-             ROUND(SUM(MAX(0.0, CAST(cs.sales_qty AS REAL) - CAST(cs.return_qty AS REAL))), 1) AS net_qty,
-             ROUND(SUM(MAX(0.0, CAST(cs.sales_qty AS REAL) - CAST(cs.return_qty AS REAL))
-                       * COALESCE(cp.retail_price, 0)), 1) AS revenue
-      FROM catalog_sales cs
-      JOIN catalog_products cp ON cp.item_code = cs.item_code
-      WHERE cs.sale_date >= '2024-01-01' ${cpFilter}
-      GROUP BY year, month
-      ORDER BY year, month
-    `).all(...pp);
+    let rows;
+    if (!cpFilter) {
+      rows = stmt(`SELECT year, month, net_qty, revenue FROM _monthly_sales ORDER BY year, month`).all();
+    } else {
+      rows = stmt(`
+        SELECT CAST(strftime('%Y', cs.sale_date) AS INTEGER) AS year,
+               CAST(strftime('%m', cs.sale_date) AS INTEGER) AS month,
+               ROUND(SUM(MAX(0.0, CAST(cs.sales_qty AS REAL) - CAST(cs.return_qty AS REAL))), 1) AS net_qty,
+               ROUND(SUM(MAX(0.0, CAST(cs.sales_qty AS REAL) - CAST(cs.return_qty AS REAL))
+                         * COALESCE(cp.retail_price, 0)), 1) AS revenue
+        FROM catalog_sales cs
+        JOIN catalog_products cp ON cp.item_code = cs.item_code
+        WHERE cs.sale_date >= '2024-01-01' ${cpFilter}
+        GROUP BY year, month
+        ORDER BY year, month
+      `).all(...pp);
+    }
 
     res.json(rows);
   } catch (err) {
@@ -1193,7 +1219,7 @@ app.get('/api/analytics/suppliers', (req, res) => {
     const { where: pw, params: pp } = catalogPathWhere(pathParts);
     const cpFilter = pw ? `AND ${pw}` : '';
 
-    const itemRows = db.prepare(`
+    const itemRows = stmt(`
       SELECT s.supplier_name,
              CAST(cp.qty AS REAL) AS qty,
              CAST(cp.purchase_price AS REAL) AS purchase_price,
@@ -1208,10 +1234,7 @@ app.get('/api/analytics/suppliers', (req, res) => {
       JOIN product_supplier_map psm ON psm.product_id = pr.id AND psm.is_primary = 1
       JOIN suppliers s ON s.id = psm.supplier_id
       LEFT JOIN catalog_forecast cf ON cf.item_code = cp.item_code
-      LEFT JOIN (
-        SELECT item_code, MAX(sale_date) AS last_sale_date
-        FROM catalog_sales GROUP BY item_code
-      ) ls ON ls.item_code = cp.item_code
+      LEFT JOIN _sales_cache ls ON ls.item_code = cp.item_code
       WHERE cp.qty > 0 ${cpFilter}
     `).all(...pp);
 
@@ -1287,7 +1310,7 @@ app.get('/api/analytics/items', (req, res) => {
     if (pw) conditions.push(pw);
 
     const overstockCond = `(cf.forecast_day_matrix > 0 AND cp.qty > 1 AND CAST(cp.qty AS REAL)/cf.forecast_day_matrix > ${OVERSTOCK_DAYS})`;
-    const nlqCond       = `(ls.last_sale_date IS NULL OR CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) > ${NLQ_DAYS})`;
+    const nlqCond       = `(ls.last_sale_date IS NULL OR IFNULL(ls.days_since_last_sale, 9999) > ${NLQ_DAYS})`;
 
     if (segment === 'overstock_only') {
       conditions.push(overstockCond, `NOT ${nlqCond}`);
@@ -1322,25 +1345,22 @@ app.get('/api/analytics/items', (req, res) => {
 
     const baseJoins = `
       LEFT JOIN catalog_forecast cf ON cf.item_code = cp.item_code
-      LEFT JOIN (
-        SELECT item_code, MAX(sale_date) AS last_sale_date
-        FROM catalog_sales GROUP BY item_code
-      ) ls ON ls.item_code = cp.item_code
+      LEFT JOIN _sales_cache ls ON ls.item_code = cp.item_code
       ${supplierJoin}
     `;
 
-    const total = db.prepare(`
+    const total = stmt(`
       SELECT COUNT(*) AS cnt FROM catalog_products cp ${baseJoins} ${where}
     `).get(...params).cnt;
 
-    const items = db.prepare(`
+    const items = stmt(`
       SELECT cp.id, cp.item_code, cp.item_name, cp.barcode, cp.qty,
              cp.purchase_price, cp.retail_price,
              cp.parent_name, cp.group_l0, cp.group_l1, cp.group_full_path,
              cf.forecast_day_matrix, cf.abc_class, cf.xyz_class,
              cf.to_order AS forecast_to_order,
              ls.last_sale_date,
-             CAST(julianday('now') - julianday(ls.last_sale_date) AS INTEGER) AS days_since_last_sale,
+             ls.days_since_last_sale,
              CASE WHEN cf.forecast_day_matrix > 0
                THEN ROUND(CAST(cp.qty AS REAL) / cf.forecast_day_matrix, 0)
                ELSE NULL END AS coverage_days
@@ -1368,13 +1388,11 @@ app.use('/inventory-manager-web/assets', express.static(path.join(distDir, 'asse
   }
 }));
 app.use(express.static(distDir, {
-  setHeaders: (res, filePath) => {
-    if (filePath.endsWith('index.html')) {
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
-      res.setHeader('Surrogate-Control', 'no-store');
-    }
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
   }
 }));
 app.get('*', (_req, res) => {
@@ -1384,6 +1402,21 @@ app.get('*', (_req, res) => {
   res.setHeader('Surrogate-Control', 'no-store');
   res.sendFile(path.join(distDir, 'index.html'));
 });
+
+// Pre-warm statement cache and SQLite page cache at startup
+setTimeout(() => {
+  try {
+    stmt(`SELECT group_l0, COUNT(*) FROM catalog_products WHERE group_l0 IS NOT NULL GROUP BY group_l0`).all();
+    stmt(`SELECT COUNT(*) FROM catalog_products`).get();
+    stmt(`SELECT cp.item_code FROM catalog_products cp LEFT JOIN _sales_cache ls ON ls.item_code=cp.item_code LEFT JOIN catalog_forecast cf ON cf.item_code=cp.item_code ORDER BY cp.qty DESC NULLS LAST LIMIT 1`).all();
+    stmt(`SELECT DISTINCT pr.supplier_name FROM purchase_recommendations pr WHERE pr.supplier_name IS NOT NULL AND pr.supplier_name != '' AND pr.supplier_name != 'UNMAPPED_SUPPLIER' AND pr.calc_date=(SELECT MAX(calc_date) FROM purchase_recommendations) ORDER BY pr.supplier_name`).all();
+    stmt(`SELECT value FROM _analytics_cache WHERE key='summary'`).get();
+    stmt(`SELECT value FROM _analytics_cache WHERE key='analytics_all'`).get();
+    stmt(`SELECT year, month, net_qty, revenue FROM _monthly_sales ORDER BY year, month`).all();
+    stmt(`SELECT COUNT(CASE WHEN status IN ('urgent_order','order','pre_season_order','limited_history_manual_check') AND to_order > 0 THEN 1 END) AS total_to_order FROM purchase_recommendations WHERE calc_date=(SELECT MAX(calc_date) FROM purchase_recommendations)`).get();
+    console.log('stmt cache warmed');
+  } catch(e) { console.warn('warm-up skipped:', e.message); }
+}, 100);
 
 const port = Number(process.env.PORT || 8787);
 app.listen(port, '0.0.0.0', () => {
