@@ -3851,20 +3851,7 @@ export function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(c2SortBy === 'recommended_stock' || c2SortBy === 'to_order' || c2SortBy === 'delta' ? [...c2Items].sort((a, b) => {
-                      const fa = c2ForecastMap[String(a.id)];
-                      const fb = c2ForecastMap[String(b.id)];
-                      const recA = fa ? Math.max(0, Math.ceil((fa.forecast_day_matrix || 0) * ((fa.lead_time_days || 0) + (fa.order_cycle_days || 0)) + (fa.ss_total || 0))) : (a.recommended_stock ?? 0);
-                      const recB = fb ? Math.max(0, Math.ceil((fb.forecast_day_matrix || 0) * ((fb.lead_time_days || 0) + (fb.order_cycle_days || 0)) + (fb.ss_total || 0))) : (b.recommended_stock ?? 0);
-                      const ordA = fa ? Math.max(0, Math.ceil(recA - (a.qty || 0))) : Math.max(0, a.to_order ?? a.forecast_to_order ?? 0);
-                      const ordB = fb ? Math.max(0, Math.ceil(recB - (b.qty || 0))) : Math.max(0, b.to_order ?? b.forecast_to_order ?? 0);
-                      const deltaA = recA ? Math.round(recA) - (a.qty || 0) : 0;
-                      const deltaB = recB ? Math.round(recB) - (b.qty || 0) : 0;
-                      const dir = c2SortDir === 'asc' ? 1 : -1;
-                      if (c2SortBy === 'recommended_stock') return (recA - recB) * dir;
-                      if (c2SortBy === 'delta') return (deltaA - deltaB) * dir;
-                      return (ordA - ordB) * dir;
-                    }) : c2Items).map(item => {
+                    {c2Items.map(item => {
                       const forecast = c2ForecastMap[String(item.id)];
                       const recommendedStock = forecast
                         ? Math.max(0, Math.ceil((forecast.forecast_day_matrix || 0) * ((forecast.lead_time_days || 0) + (forecast.order_cycle_days || 0)) + (forecast.ss_total || 0)))

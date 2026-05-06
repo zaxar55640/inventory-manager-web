@@ -677,11 +677,16 @@ app.get('/api/catalog2/items', (req, res) => {
     const sortByRaw  = String(req.query.sort_by  || 'item_name').split(',');
     const sortDirRaw = String(req.query.sort_dir || 'asc').split(',');
 
-    const allowedSort = new Set(['item_name','item_code','qty','retail_price','purchase_price','parent_name','last_sale_date','days_since_last_sale','abc_class','forecast_day_matrix']);
+    const allowedSort = new Set(['item_name','item_code','qty','retail_price','purchase_price','parent_name','last_sale_date','days_since_last_sale','abc_class','forecast_day_matrix','to_order','recommended_stock','delta']);
+    const colSql = {
+      'to_order':           'COALESCE(cf.to_order, 0)',
+      'recommended_stock':  '(COALESCE(cf.to_order, 0) + COALESCE(cp.qty, 0))',
+      'delta':              'COALESCE(cf.to_order, 0)',
+    };
     const orderClauses = sortByRaw.map((col, i) => {
       if (!allowedSort.has(col)) return null;
       const dir = (sortDirRaw[i] || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
-      return `${col} ${dir} NULLS LAST`;
+      return `${colSql[col] || col} ${dir} NULLS LAST`;
     }).filter(Boolean);
     if (!orderClauses.length) orderClauses.push('item_name ASC NULLS LAST');
 
