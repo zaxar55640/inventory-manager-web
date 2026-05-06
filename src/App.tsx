@@ -2146,6 +2146,7 @@ export function App() {
   const [c2Offset, setC2Offset] = useState(0);
   const [c2HasMore, setC2HasMore] = useState(false);
   const [c2Loading, setC2Loading] = useState(false);
+  const c2ReqIdRef = useRef(0);
   const [c2Search, setC2Search] = useState('');
   const [c2Path, setC2Path] = useState('');
   const [analyticsReturnPath, setAnalyticsReturnPath] = useState('');
@@ -2237,6 +2238,7 @@ export function App() {
   }
 
   async function c2LoadItems(path: string, q: string, offset: number, sortBy = c2SortBy, sortDir = c2SortDir, hasStock = c2HasStock, supplier = c2Supplier) {
+    const myId = ++c2ReqIdRef.current;
     const params = new URLSearchParams();
     if (path) params.set('path', path);
     if (q.trim()) params.set('q', q.trim());
@@ -2249,14 +2251,16 @@ export function App() {
     setC2Loading(true);
     try {
       const data = await fetchJSON<Catalog2Response>(apiUrl(`/api/catalog2/items?${params}`));
+      if (myId !== c2ReqIdRef.current) return;
       setC2Items(Array.isArray(data?.items) ? data.items : []);
       setC2Total(Number(data?.total ?? 0));
       setC2Offset(Number(data?.offset ?? 0));
       setC2HasMore(Boolean(data?.has_more));
     } catch (err) {
+      if (myId !== c2ReqIdRef.current) return;
       console.error('c2LoadItems', err);
       setC2Items([]); setC2Total(0); setC2HasMore(false);
-    } finally { setC2Loading(false); }
+    } finally { if (myId === c2ReqIdRef.current) setC2Loading(false); }
   }
 
   async function c2LoadForecast(code: string) {
@@ -2452,7 +2456,6 @@ export function App() {
     if (tab === 'catalog') loadCatalog(catalogGroup, catalogSearch, catalogSupplier, catalogSortBy, catalogSortDir, 0);
     if (tab === 'catalog2') {
       if (!c2TreeCache.has('')) c2LoadChildren('');
-      c2LoadItems(c2Path, c2Search, 0);
     }
   }, [tab]);
 
@@ -2470,12 +2473,17 @@ export function App() {
     loadCatalog(catalogGroup, catalogSearch, catalogSupplier, catalogSortBy, catalogSortDir, catalogOffset);
   }, [catalogOffset]);
 
-  // catalog2 effects
+  // catalog2 effects — one authoritative trigger for items load
   useEffect(() => {
     if (tab !== 'catalog2') return;
-    const t = setTimeout(() => { setC2Offset(0); c2LoadItems(c2Path, c2Search, 0); }, 300);
-    return () => clearTimeout(t);
-  }, [c2Path, c2Search, c2SortBy, c2SortDir, c2HasStock, c2Supplier]);
+    // Debounce only search input; path/sort/filter changes load immediately
+    if (c2Search) {
+      const t = setTimeout(() => { setC2Offset(0); c2LoadItems(c2Path, c2Search, 0); }, 300);
+      return () => clearTimeout(t);
+    }
+    setC2Offset(0);
+    c2LoadItems(c2Path, c2Search, 0);
+  }, [tab, c2Path, c2Search, c2SortBy, c2SortDir, c2HasStock, c2Supplier]);
 
   // Load catalog2 suppliers on mount
   useEffect(() => {
