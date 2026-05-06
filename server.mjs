@@ -680,8 +680,8 @@ app.get('/api/catalog2/items', (req, res) => {
     const allowedSort = new Set(['item_name','item_code','qty','retail_price','purchase_price','parent_name','last_sale_date','days_since_last_sale','abc_class','forecast_day_matrix','to_order','recommended_stock','delta']);
     const colSql = {
       'to_order':           'COALESCE(cf.to_order, 0)',
-      'recommended_stock':  '(COALESCE(cf.to_order, 0) + COALESCE(cp.qty, 0))',
-      'delta':              'COALESCE(cf.to_order, 0)',
+      'recommended_stock':  'COALESCE(cf.recommended_stock, 0)',
+      'delta':              '(COALESCE(cf.recommended_stock, 0) - COALESCE(cp.qty, 0))',
     };
     const orderClauses = sortByRaw.map((col, i) => {
       if (!allowedSort.has(col)) return null;

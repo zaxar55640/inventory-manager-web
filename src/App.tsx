@@ -741,7 +741,7 @@ function ProductDetailModal2({
               Динамика продаж
               {salesData?.has_data && (
                 <span style={{fontWeight: 500, color: '#94a3b8', marginLeft: 10, fontSize: '0.94em'}}>
-                  {totalSales.toLocaleString('ru-RU')} прод. · {totalReturns} возвр.
+                  {(totalSales || 0).toLocaleString('ru-RU')} прод. · {totalReturns} возвр.
                   {salesData.series.length > 0 && (
                     <span style={{marginLeft: 6, color: '#334155'}}>({salesData.series.length} {salesData.gran === 'day' ? 'дней' : salesData.gran === 'week' ? 'недель' : 'мес.'})</span>
                   )}
@@ -802,7 +802,7 @@ function ProductDetailModal2({
 
           <div style={{display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginTop: 16}}>
             {[
-              {label: 'Среднее за период', value: `${avgSalesPerPeriod.toLocaleString('ru-RU', {maximumFractionDigits: 1})} шт.`, tone: '#f8fafc'},
+              {label: 'Среднее за период', value: `${(avgSalesPerPeriod || 0).toLocaleString('ru-RU', {maximumFractionDigits: 1})} шт.`, tone: '#f8fafc'},
               {label: salesData?.gran === 'day' ? 'Дней без продаж' : salesData?.gran === 'week' ? 'Недель без продаж' : 'Месяцев без продаж', value: `${zeroPeriods}`, tone: zeroPeriods > 0 ? '#f59e0b' : '#22c55e'},
               {label: 'Активных периодов', value: `${activePeriods} / ${periodCount || 0} · ${activeShare}%`, tone: '#60a5fa'},
               {label: 'Пик продаж', value: peakSalesPoint ? `${peakSalesPoint.sales} шт.` : '—', tone: '#22c55e', sub: peakSalesPoint ? String(peakSalesPoint.label ?? peakSalesPoint.date ?? '') : undefined},
@@ -990,7 +990,7 @@ function ProductDetailModal2({
                         <div style={{color: '#1e293b', fontSize: '1.2em'}}>−</div>
                         <div>
                           <div style={{fontSize: '0.68em', color: '#475569'}}>Есть сейчас</div>
-                          <div style={{fontWeight: 600, color: '#64748b'}}>{item.qty.toLocaleString('ru-RU')} шт.</div>
+                          <div style={{fontWeight: 600, color: '#64748b'}}>{(item.qty || 0).toLocaleString('ru-RU')} шт.</div>
                         </div>
                         <div style={{flex: 1}}/>
                         <div style={{textAlign: 'center', background: dynOrder > 0 ? '#052e16' : '#0f172a', borderRadius: 10, padding: '10px 18px', border: `1px solid ${dynOrder > 0 ? '#16a34a' : '#1e293b'}`}}>
