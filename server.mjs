@@ -19,7 +19,7 @@ try { stmt('ALTER TABLE catalog_products ADD COLUMN supplier_name TEXT').run(); 
 // Register JS toLowerCase so SQLite can do case-insensitive Cyrillic search
 db.function('jslower', (s) => (s == null ? null : String(s).toLowerCase()));
 
-// Prepared-statement cache — avoids re-compiling identical SQL on every request (~20ms each)
+// Prepared-statement cache - avoids re-compiling identical SQL on every request (~20ms each)
 const _stmtCache = new Map();
 const stmt = (sql) => {
   if (!_stmtCache.has(sql)) _stmtCache.set(sql, db.prepare(sql));
@@ -85,9 +85,25 @@ try {
 try {
   db.exec(`ALTER TABLE purchase_order_items ADD COLUMN reason TEXT;`);
 } catch {}
+try { db.exec(`ALTER TABLE purchase_order_batches ADD COLUMN batch_name TEXT;`); } catch {}
+try { db.exec(`ALTER TABLE purchase_order_batches ADD COLUMN manager_name TEXT;`); } catch {}
+try { db.exec(`ALTER TABLE purchase_order_batches ADD COLUMN started_at TEXT;`); } catch {}
+try { db.exec(`ALTER TABLE purchase_order_batches ADD COLUMN submitted_at TEXT;`); } catch {}
+try { db.exec(`ALTER TABLE purchase_order_batches ADD COLUMN completed_at TEXT;`); } catch {}
+try { db.exec(`ALTER TABLE purchase_order_batches ADD COLUMN canceled_at TEXT;`); } catch {}
+try { db.exec(`ALTER TABLE purchase_order_items ADD COLUMN supplier_name TEXT;`); } catch {}
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS order_managers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_order_managers_name ON order_managers(name);
+  `);
+} catch {}
 
-stmt("UPDATE purchase_order_batches SET is_draft = 0 WHERE status = 'completed'").run();
-try { stmt("DELETE FROM purchase_order_batches WHERE is_draft = 1").run(); } catch {}
+stmt("UPDATE purchase_order_batches SET is_draft = 0 WHERE status IN ('completed', 'submitted', 'in_delivery', 'cancelled')").run();
 
 app.get('/api/suppliers', (_req, res) => {
   const rows = stmt(`
@@ -401,9 +417,28 @@ app.post('/api/coverage/product', (req, res) => {
   res.json({ok: true});
 });
 
+app.get('/api/managers', (_req, res) => {
+  const rows = stmt(`SELECT id, name FROM order_managers ORDER BY name COLLATE NOCASE ASC`).all();
+  res.json(rows);
+});
+
+app.post('/api/managers', (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({error: 'name required'});
+  try {
+    const result = stmt(`INSERT OR IGNORE INTO order_managers (name) VALUES (?)`).run(name);
+    const row = stmt(`SELECT id, name FROM order_managers WHERE name = ?`).get(name);
+    res.json({ok: true, created: !!result.changes, manager: row});
+  } catch (e) {
+    res.status(500).json({error: String(e?.message || e)});
+  }
+});
+
 app.get('/api/drafts', (_req, res) => {
   const rows = stmt(`
     SELECT b.id, b.supplier_name, b.status, b.created_at, b.draft_mode,
+           COALESCE(b.batch_name, b.supplier_name, '') AS batch_name,
+           b.manager_name,
            COUNT(i.id) AS items_count,
            ROUND(SUM(COALESCE(i.final_qty, i.manager_qty, i.recommended_qty)), 2) AS total_qty
     FROM purchase_order_batches b
@@ -416,19 +451,19 @@ app.get('/api/drafts', (_req, res) => {
 });
 
 app.get('/api/drafts/latest', (_req, res) => {
-  const row = stmt(`SELECT id, supplier_name, status, created_at, draft_mode FROM purchase_order_batches WHERE is_draft = 1 ORDER BY id DESC LIMIT 1`).get();
+  const row = stmt(`SELECT id, supplier_name, status, created_at, draft_mode, COALESCE(batch_name, '') AS batch_name, manager_name FROM purchase_order_batches WHERE is_draft = 1 ORDER BY id DESC LIMIT 1`).get();
   res.json(row || null);
 });
 
 app.post('/api/drafts', (req, res) => {
-  const {draft_mode, batch_name} = req.body;
-  const result = stmt(`INSERT INTO purchase_order_batches (batch_date, supplier_name, batch_name, status, draft_mode, is_draft) VALUES (date(), '', ?, 'draft', ?, 1)`).run(batch_name || '', draft_mode || 'single');
+  const {draft_mode, batch_name, manager_name} = req.body;
+  const result = stmt(`INSERT INTO purchase_order_batches (batch_date, supplier_name, batch_name, manager_name, status, draft_mode, is_draft) VALUES (date(), '', ?, ?, 'draft', ?, 1)`).run(batch_name || '', manager_name || '', draft_mode || 'single');
   res.json({id: result.lastInsertRowid});
 });
 
 app.get('/api/drafts/:id', (req, res) => {
-  const batch = stmt(`SELECT id, supplier_name, status, created_at, draft_mode FROM purchase_order_batches WHERE id = ?`).get(req.params.id);
-  const items = stmt(`SELECT id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, reason FROM purchase_order_items WHERE batch_id = ? ORDER BY id DESC`).all(req.params.id);
+  const batch = stmt(`SELECT id, supplier_name, status, created_at, draft_mode, COALESCE(batch_name,'') AS batch_name, manager_name, started_at, submitted_at, completed_at, canceled_at FROM purchase_order_batches WHERE id = ?`).get(req.params.id);
+  const items = stmt(`SELECT id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, reason, supplier_name FROM purchase_order_items WHERE batch_id = ? ORDER BY id DESC`).all(req.params.id);
   res.json({batch, items});
 });
 
@@ -439,9 +474,9 @@ app.post('/api/drafts/:id/items', (req, res) => {
   const exists = stmt(`SELECT id FROM purchase_order_items WHERE batch_id = ? AND recommendation_id = ?`).get(req.params.id, item.recommendation_id);
   if (exists) return res.json({ok: true, existing: true});
   stmt(`UPDATE purchase_order_batches SET supplier_name = CASE WHEN supplier_name = '' THEN ? ELSE supplier_name END WHERE id = ?`).run(item.supplier_name || '', req.params.id);
-  stmt(`INSERT INTO purchase_order_items (batch_id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, item_status, reason)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)`)
-    .run(req.params.id, rec.id, rec.item_ref, rec.sku_name, rec.norm_name, rec.to_order, item.manager_qty ?? rec.to_order, item.manager_qty ?? rec.to_order, item.reason || '');
+  stmt(`INSERT INTO purchase_order_items (batch_id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, item_status, reason, supplier_name)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`)
+    .run(req.params.id, rec.id, rec.item_ref, rec.sku_name, rec.norm_name, rec.to_order, item.manager_qty ?? rec.to_order, item.manager_qty ?? rec.to_order, item.reason || '', item.supplier_name || '');
   res.json({ok: true});
 });
 
@@ -465,8 +500,8 @@ app.post('/api/drafts/:id/catalog-items', (req, res) => {
     stmt(`UPDATE purchase_order_items SET manager_qty = ?, final_qty = ? WHERE id = ?`).run(item.manager_qty || 1, item.manager_qty || 1, existing.id);
     return res.json({ok: true, existing: true, id: existing.id});
   }
-  const result = stmt(`INSERT INTO purchase_order_items (batch_id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, item_status, reason) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'draft', ?)`)
-    .run(req.params.id, item.item_ref, item.sku_name || '', item.norm_name || '', item.recommended_qty || 0, item.manager_qty || 1, item.manager_qty || 1, item.reason || '');
+  const result = stmt(`INSERT INTO purchase_order_items (batch_id, recommendation_id, item_ref, sku_name, norm_name, recommended_qty, manager_qty, final_qty, item_status, reason, supplier_name) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`) 
+    .run(req.params.id, item.item_ref, item.sku_name || '', item.norm_name || '', item.recommended_qty || 0, item.manager_qty || 1, item.manager_qty || 1, item.reason || '', item.supplier_name || '');
   res.json({ok: true, id: result.lastInsertRowid});
 });
 
@@ -476,7 +511,7 @@ try { stmt('ALTER TABLE purchase_order_batches ADD COLUMN batch_name TEXT').run(
 app.get('/api/orders', (_req, res) => {
   const rows = stmt(`
     SELECT b.id, COALESCE(b.batch_name, b.supplier_name, '') AS batch_name,
-           b.supplier_name, b.status, b.created_at,
+           b.supplier_name, b.status, b.created_at, b.manager_name,
            COUNT(i.id) AS items_count,
            ROUND(SUM(COALESCE(i.final_qty, i.manager_qty, i.recommended_qty)), 2) AS total_qty
     FROM purchase_order_batches b
@@ -489,10 +524,10 @@ app.get('/api/orders', (_req, res) => {
 });
 
 app.get('/api/orders/:id', (req, res) => {
-  const batch = stmt(`SELECT id, COALESCE(batch_name,'') AS batch_name, supplier_name, status, created_at FROM purchase_order_batches WHERE id = ?`).get(req.params.id);
+  const batch = stmt(`SELECT id, COALESCE(batch_name,'') AS batch_name, supplier_name, status, created_at, manager_name, started_at, submitted_at, completed_at, canceled_at FROM purchase_order_batches WHERE id = ?`).get(req.params.id);
   const items = stmt(`
     SELECT i.id, i.sku_name, i.item_ref, i.recommended_qty, i.manager_qty, i.final_qty, i.reason, i.item_status,
-           COALESCE(r.supplier_name,
+           COALESCE(i.supplier_name, r.supplier_name,
              (SELECT pr.supplier_name FROM purchase_recommendations pr
               WHERE pr.item_ref = i.item_ref LIMIT 1)
            ) AS supplier_name,
@@ -504,23 +539,52 @@ app.get('/api/orders/:id', (req, res) => {
   res.json({batch, items});
 });
 
+app.post('/api/drafts/:id/start', (req, res) => {
+  const batchId = req.params.id;
+  const managerName = String(req.body?.manager_name || '').trim();
+  if (!managerName) return res.status(400).json({error: 'manager_name required'});
+  stmt(`INSERT OR IGNORE INTO order_managers (name) VALUES (?)`).run(managerName);
+  stmt(`UPDATE purchase_order_batches SET manager_name = ?, status = 'processing', started_at = CURRENT_TIMESTAMP WHERE id = ?`).run(managerName, batchId);
+  res.json({ok: true});
+});
+
 app.post('/api/drafts/:id/submit', (req, res) => {
   const batchId = req.params.id;
+  const managerName = String(req.body?.manager_name || '').trim() || String(stmt(`SELECT COALESCE(manager_name, '') AS manager_name FROM purchase_order_batches WHERE id = ?`).get(batchId)?.manager_name || '').trim();
+  if (!managerName) return res.status(400).json({error: 'manager_name required'});
+  stmt(`INSERT OR IGNORE INTO order_managers (name) VALUES (?)`).run(managerName);
   const items = stmt(`SELECT i.*, r.supplier_name, r.store, r.item_ref AS rec_item_ref, r.sku_name AS rec_sku_name, r.norm_name, r.to_order
                             FROM purchase_order_items i
                             LEFT JOIN purchase_recommendations r ON r.id = i.recommendation_id
                             WHERE i.batch_id = ?`).all(batchId);
   for (const item of items) {
-    stmt(`INSERT INTO manager_decisions (decision_date, recommendation_id, supplier_name, store, item_ref, sku_name, norm_name, system_qty, manager_qty, delta_qty, reason, manager_name)
-                VALUES (date(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manager')`)
-      .run(item.recommendation_id, item.supplier_name || '', item.store || '', item.rec_item_ref || item.item_ref || '', item.rec_sku_name || item.sku_name, item.norm_name || '', item.recommended_qty || item.to_order || 0, item.manager_qty || 0, (item.manager_qty || 0) - (item.recommended_qty || item.to_order || 0), item.reason || '');
+    const systemQty = item.recommended_qty || item.to_order || 0;
+    const managerQty = item.manager_qty || 0;
+    if (managerQty !== systemQty || (item.reason || '').trim()) {
+      stmt(`INSERT INTO manager_decisions (decision_date, recommendation_id, supplier_name, store, item_ref, sku_name, norm_name, system_qty, manager_qty, delta_qty, reason, manager_name)
+                  VALUES (date(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(item.recommendation_id, item.supplier_name || '', item.store || '', item.rec_item_ref || item.item_ref || '', item.rec_sku_name || item.sku_name, item.norm_name || '', systemQty, managerQty, managerQty - systemQty, item.reason || '', managerName);
+    }
   }
-  stmt(`UPDATE purchase_order_batches SET is_draft = 0, supplier_name = COALESCE(NULLIF(supplier_name,''), 'multi-supplier') WHERE id = ?`).run(batchId);
+  stmt(`UPDATE purchase_order_batches
+        SET is_draft = 0,
+            manager_name = ?,
+            supplier_name = COALESCE(NULLIF(supplier_name,''), 'multi-supplier'),
+            status = 'in_delivery',
+            submitted_at = CURRENT_TIMESTAMP
+        WHERE id = ?`).run(managerName, batchId);
+  stmt(`UPDATE purchase_order_items SET item_status = 'in_delivery' WHERE batch_id = ?`).run(batchId);
+  res.json({ok: true});
+});
+
+app.post('/api/orders/:id/cancel', (req, res) => {
+  stmt("UPDATE purchase_order_batches SET status = 'cancelled', canceled_at = CURRENT_TIMESTAMP, is_draft = 0 WHERE id = ?").run(req.params.id);
+  stmt("UPDATE purchase_order_items SET item_status = 'cancelled' WHERE batch_id = ?").run(req.params.id);
   res.json({ok: true});
 });
 
 app.post('/api/orders/:id/complete', (req, res) => {
-  stmt("UPDATE purchase_order_batches SET status = 'completed' WHERE id = ?").run(req.params.id);
+  stmt("UPDATE purchase_order_batches SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?").run(req.params.id);
   stmt("UPDATE purchase_order_items SET item_status = 'completed' WHERE batch_id = ?").run(req.params.id);
   res.json({ok: true});
 });
@@ -582,6 +646,13 @@ app.get('/api/products-catalog', (req, res) => {
       WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM non_liquid_snapshot)
       GROUP BY sku_name
     ) nl ON nl.sku_name = r.sku_name
+    LEFT JOIN (
+      SELECT poi.item_ref, ROUND(SUM(COALESCE(poi.final_qty, poi.manager_qty, 0)), 2) AS in_delivery_qty
+      FROM purchase_order_items poi
+      JOIN purchase_order_batches pob ON pob.id = poi.batch_id
+      WHERE pob.status = 'in_delivery'
+      GROUP BY poi.item_ref
+    ) od ON od.item_ref = r.item_ref
     ${where}
   `;
 
@@ -591,6 +662,7 @@ app.get('/api/products-catalog', (req, res) => {
       SELECT r.sku_name, r.item_ref, p.barcode,
              ss.subgroup,
              r.available_qty,
+             COALESCE(od.in_delivery_qty, 0) AS in_delivery_qty,
              r.supplier_name,
              r.to_order,
              SUBSTR(r.status_ranked, 3) AS status,
@@ -734,10 +806,21 @@ app.get('/api/catalog2/items', (req, res) => {
              cf.abc_class, cf.xyz_class, cf.forecast_day_matrix, cf.to_order AS forecast_to_order,
              cf.demand_mode AS forecast_mode, cf.w_forecast_final,
              cf.oos_days_365, cf.oos_fraction,
+             COALESCE(od.in_delivery_qty, 0) AS in_delivery_qty,
+             COALESCE(od.active_order_count, 0) AS active_order_count,
              (SELECT pr.supplier_name FROM purchase_recommendations pr WHERE pr.item_ref = cp.item_code LIMIT 1) AS supplier_name
       FROM catalog_products cp
       LEFT JOIN _sales_cache ls ON ls.item_code = cp.item_code
       LEFT JOIN catalog_forecast cf ON cf.item_code = cp.item_code
+      LEFT JOIN (
+        SELECT poi.item_ref,
+               ROUND(SUM(COALESCE(poi.final_qty, poi.manager_qty, 0)), 2) AS in_delivery_qty,
+               COUNT(DISTINCT pob.id) AS active_order_count
+        FROM purchase_order_items poi
+        JOIN purchase_order_batches pob ON pob.id = poi.batch_id
+        WHERE pob.status = 'in_delivery'
+        GROUP BY poi.item_ref
+      ) od ON od.item_ref = cp.item_code
       ${where}
       ORDER BY ${orderClauses.join(', ')}
       LIMIT ? OFFSET ?
@@ -969,6 +1052,19 @@ app.get('/api/catalog2/item/:code/forecast', (req, res) => {
     }
     row.anomaly_threshold = Math.round(threshold * 10) / 10;
 
+    row.active_orders = stmt(`
+      SELECT pob.id, COALESCE(pob.batch_name, pob.supplier_name, '') AS batch_name, pob.status,
+             pob.manager_name, ROUND(SUM(COALESCE(poi.final_qty, poi.manager_qty, 0)), 2) AS qty
+      FROM purchase_order_items poi
+      JOIN purchase_order_batches pob ON pob.id = poi.batch_id
+      WHERE poi.item_ref = ? AND pob.status = 'in_delivery'
+      GROUP BY pob.id
+      ORDER BY pob.id DESC
+    `).all(code);
+    row.in_delivery_qty = row.active_orders.reduce((s, x) => s + Number(x.qty || 0), 0);
+    if (typeof row.recommended_stock === 'number') {
+      row.to_order_adjusted = Math.max(0, Math.ceil(Number(row.recommended_stock || 0) - Number(row.in_delivery_qty || 0)));
+    }
     res.json(row);
   } catch (err) { res.status(500).json({error: err.message}); }
 });
@@ -1152,7 +1248,7 @@ app.get('/api/analytics/summary', (req, res) => {
       )
     `).get(...pp);
 
-    // pre_season needs JSON parsing — only fetch items that have forecast_to_order > 0
+    // pre_season needs JSON parsing - only fetch items that have forecast_to_order > 0
     const curM = new Date().getMonth() + 1;
     const preSeasonRows = stmt(`
       SELECT cf.peak_months

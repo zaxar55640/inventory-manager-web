@@ -40,11 +40,12 @@ type Recommendation = {
   status: string;
 };
 
-type DraftSummary = {id: number; supplier_name: string; status: string; created_at: string; draft_mode: 'single' | 'multi'; items_count: number; total_qty: number};
-type OrderBatch = {id: number; batch_name: string; supplier_name: string; status: string; created_at: string; items_count: number; total_qty: number};
-type DraftItem = {id: number; recommendation_id: number; item_ref: string; sku_name: string; norm_name: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string};
-type DraftDetail = {batch: DraftSummary; items: DraftItem[]};
-type OrderDetail = {batch: {id: number; batch_name: string; supplier_name: string; status: string; created_at: string}; items: Array<{id: number; sku_name: string; item_ref: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string; item_status: string; supplier_name?: string; article?: string}>};
+type ManagerOption = {id: number; name: string};
+type DraftSummary = {id: number; supplier_name: string; batch_name?: string; manager_name?: string; status: string; created_at: string; draft_mode: 'single' | 'multi'; items_count: number; total_qty: number};
+type OrderBatch = {id: number; batch_name: string; supplier_name: string; manager_name?: string; status: string; created_at: string; items_count: number; total_qty: number};
+type DraftItem = {id: number; recommendation_id: number; item_ref: string; sku_name: string; norm_name: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string; supplier_name?: string};
+type DraftDetail = {batch: DraftSummary & {started_at?: string; submitted_at?: string; completed_at?: string; canceled_at?: string}; items: DraftItem[]};
+type OrderDetail = {batch: {id: number; batch_name: string; supplier_name: string; manager_name?: string; status: string; created_at: string; started_at?: string; submitted_at?: string; completed_at?: string; canceled_at?: string}; items: Array<{id: number; sku_name: string; item_ref: string; recommended_qty: number; manager_qty: number; final_qty: number; reason: string; item_status: string; supplier_name?: string; article?: string}>};
 type NonLiquidItem = {store: string; store_ref: string; item_ref: string; sku_name: string; norm_name: string; subgroup: string; available_qty: number; sales_qty_4m: number; last_sale_date: string | null; days_since_last_sale: number | null; is_seasonal: number; season_note: string | null; nlq_score: number | null};
 type NonLiquidResponse = {items: NonLiquidItem[]; total: number; limit: number; offset: number; has_more: boolean};
 type Dashboard = {total_to_order: number; urgent_count: number; pre_season_count: number; overstock_count: number; new_items_count: number};
@@ -52,7 +53,7 @@ type Decision = {decision_date: string; manager_name: string; sku_name: string; 
 
 type CatalogItem = {
   sku_name: string; item_ref: string; barcode: string | null;
-  subgroup: string | null; available_qty: number;
+  subgroup: string | null; available_qty: number; in_delivery_qty?: number;
   supplier_name: string | null; to_order: number | null; status: string | null;
   pre_season_flag: number; peak_months: string | null;
   abc_class: string | null; xyz_class: string | null; explain_text: string | null;
@@ -73,6 +74,7 @@ type Catalog2Item = {
   abc_class: string|null; xyz_class: string|null;
   forecast_day_matrix: number|null; forecast_to_order: number|null;
   forecast_mode: string|null; w_forecast_final: number|null;
+  in_delivery_qty?: number|null; active_order_count?: number|null;
 };
 type C2GroupResult = {name: string; depth: number; item_count: number; path: string};
 type C2Receipt = {
@@ -115,6 +117,9 @@ type C2Forecast = {
   demand_mode: string; total_net_sales_365: number;
   anomaly_dates?: {sale_date: string; net_qty: number}[];
   anomaly_threshold?: number;
+  active_orders?: {id: number; batch_name: string; status: string; manager_name?: string; qty: number}[];
+  in_delivery_qty?: number;
+  to_order_adjusted?: number;
 };
 type C2TreeNode = {name: string; item_count: number};
 type C2TreeEntry = {children: C2TreeNode[]; directItems: number};
@@ -730,6 +735,20 @@ function ProductDetailModal2({
           ))}
         </div>
 
+        {Array.isArray(forecastData?.active_orders) && forecastData!.active_orders!.length > 0 && (
+          <div style={{marginBottom: 18, background:'#0f172a', border:'1px solid #1f2937', borderRadius:12, padding:'12px 16px'}}>
+            <div style={{fontWeight:700,color:'#f8fafc',marginBottom:8}}>Открытые заявки по товару</div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {forecastData!.active_orders!.map((o) => (
+                <div key={o.id} style={{display:'flex',justifyContent:'space-between',gap:12,flexWrap:'wrap',background:'#111827',borderRadius:10,padding:'10px 12px'}}>
+                  <div style={{color:'#e2e8f0'}}>#{o.id} · {o.batch_name || 'Заявка'} · {o.manager_name || 'без менеджера'}</div>
+                  <div style={{color:'#60a5fa',fontWeight:700}}>{Number(o.qty || 0).toLocaleString('ru-RU')} шт · {o.status}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Chart + forecast: two columns */}
         <div style={{display: 'flex', gap: 20, alignItems: 'flex-start'}}>
           <div style={{flex: 1, minWidth: 0}}>
@@ -903,6 +922,7 @@ function ProductDetailModal2({
                 // Stale forecast
                 const calcAge = Math.round((Date.now() - new Date(f.calc_date).getTime()) / 86400000);
                 const staleColor = calcAge > 14 ? '#ef4444' : calcAge > 7 ? '#f59e0b' : null;
+                const activeOrders = f.active_orders || [];
 
                 return (
                   <div style={{background: '#0f172a', borderRadius: 14, padding: '20px', marginTop: 0}}>
@@ -2061,6 +2081,9 @@ export function App() {
   const [selectedSupplier, setSelectedSupplier] = useState('');
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [orders, setOrders] = useState<OrderBatch[]>([]);
+  const [managers, setManagers] = useState<ManagerOption[]>([]);
+  const [selectedManager, setSelectedManager] = useState('');
+  const [newManagerName, setNewManagerName] = useState('');
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [currentDraft, setCurrentDraft] = useState<DraftDetail | null>(null);
   const [openOrder, setOpenOrder] = useState<OrderDetail | null>(null);
@@ -2185,6 +2208,7 @@ export function App() {
     if (!selectedSupplier && data[0]) setSelectedSupplier(data[0].supplier_name);
   }
   async function loadOrders() { setOrders(await fetchJSON<OrderBatch[]>(apiUrl('/api/orders'))); }
+  async function loadManagers() { setManagers(await fetchJSON<ManagerOption[]>(apiUrl('/api/managers'))); }
   async function loadDrafts() { setDrafts(await fetchJSON<DraftSummary[]>(apiUrl('/api/drafts'))); }
   async function loadDashboard() { setDashboard(await fetchJSON<Dashboard>(apiUrl('/api/dashboard'))); }
   async function loadDecisions() { setDecisions(await fetchJSON<Decision[]>(apiUrl('/api/decisions'))); }
@@ -2362,6 +2386,7 @@ export function App() {
   async function openDraft(id: number) {
     const detail = await fetchJSON<DraftDetail>(apiUrl(`/api/drafts/${id}`));
     setCurrentDraft(detail);
+    setSelectedManager(detail.batch.manager_name || '');
     setMode(detail.batch.draft_mode);
     setTab('create');
     navigateToTab('create');
@@ -2410,7 +2435,7 @@ export function App() {
     window.addEventListener('hashchange', onHash);
     (async () => {
       try {
-        await Promise.all([loadSuppliers(), loadOrders(), loadDrafts(), loadDashboard(), loadNonLiquidGroups(), loadCatalogGroups()]);
+        await Promise.all([loadSuppliers(), loadManagers(), loadOrders(), loadDrafts(), loadDashboard(), loadNonLiquidGroups(), loadCatalogGroups()]);
         await loadNonLiquidItems('', '', 0);
         if (getTabFromLocation() === 'create') {
           const latest = await fetchJSON<DraftSummary | null>(apiUrl('/api/drafts/latest'));
@@ -2625,7 +2650,10 @@ export function App() {
     setCartSubmitting(true);
     let createdId: number | null = null;
     try {
-      const {id: draftId} = await fetchJSON<{id: number}>(apiUrl('/api/drafts'), {method: 'POST', body: JSON.stringify({draft_mode: 'multi', batch_name: c2OrderName.trim() || 'Заявка из каталога'})});
+      const managerName = await createManagerIfNeeded();
+      if (!managerName && !selectedManager) { setDraftCartValidated(true); throw new Error('manager required'); }
+      const finalManager = managerName || selectedManager;
+      const {id: draftId} = await fetchJSON<{id: number}>(apiUrl('/api/drafts'), {method: 'POST', body: JSON.stringify({draft_mode: 'multi', batch_name: c2OrderName.trim() || 'Заявка из каталога', manager_name: finalManager})});
       createdId = draftId;
       for (const [, entry] of draftCart) {
         const item = entry.item;
@@ -2638,10 +2666,12 @@ export function App() {
             recommended_qty: entry.recommendedOrder,
             manager_qty: entry.qty,
             reason: entry.reason,
+            supplier_name: item.supplier_name || '',
           }}),
         });
       }
-      await fetchJSON(apiUrl(`/api/drafts/${draftId}/submit`), {method: 'POST'});
+      await fetchJSON(apiUrl(`/api/drafts/${draftId}/start`), {method: 'POST', body: JSON.stringify({manager_name: finalManager})});
+      await fetchJSON(apiUrl(`/api/drafts/${draftId}/submit`), {method: 'POST', body: JSON.stringify({manager_name: finalManager})});
     } catch(e) {
       console.error('cartCheckout API error', e);
     } finally {
@@ -2696,9 +2726,20 @@ export function App() {
     await loadDrafts();
   }
 
+  async function startDraftProcessing() {
+    if (!currentDraft) return;
+    const managerName = (await createManagerIfNeeded()) || selectedManager || currentDraft.batch.manager_name || '';
+    if (!managerName) return alert('Нужно выбрать или добавить менеджера');
+    await fetchJSON(apiUrl(`/api/drafts/${currentDraft.batch.id}/start`), {method: 'POST', body: JSON.stringify({manager_name: managerName})});
+    await openDraft(currentDraft.batch.id);
+    await loadDrafts();
+  }
+
   async function submitDraft() {
     if (!currentDraft) return;
-    await fetchJSON(apiUrl(`/api/drafts/${currentDraft.batch.id}/submit`), {method: 'POST'});
+    const managerName = (await createManagerIfNeeded()) || selectedManager || currentDraft.batch.manager_name || '';
+    if (!managerName) return alert('Нужно выбрать или добавить менеджера');
+    await fetchJSON(apiUrl(`/api/drafts/${currentDraft.batch.id}/submit`), {method: 'POST', body: JSON.stringify({manager_name: managerName})});
     setCurrentDraft(null);
     await loadDrafts();
     await loadOrders();
@@ -2709,6 +2750,16 @@ export function App() {
   async function saveSupplierSettings(name: string, patch: Partial<Supplier>) {
     await fetchJSON(apiUrl(`/api/suppliers/${encodeURIComponent(name)}/settings`), {method: 'PATCH', body: JSON.stringify(patch)});
     await loadSuppliers();
+  }
+
+  async function createManagerIfNeeded() {
+    const name = newManagerName.trim();
+    if (!name) return selectedManager;
+    const data = await fetchJSON<{ok: boolean; manager: ManagerOption}>(apiUrl('/api/managers'), {method:'POST', body: JSON.stringify({name})});
+    await loadManagers();
+    setSelectedManager(data.manager.name);
+    setNewManagerName('');
+    return data.manager.name;
   }
 
   const isDesktopSidebar = useCallback(() => window.matchMedia('(min-width: 981px)').matches, []);
@@ -3238,7 +3289,7 @@ export function App() {
                               {order.batch_name || order.supplier_name || '—'}
                             </td>
                             <td style={{whiteSpace:'nowrap'}}>{new Date(order.created_at).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
-                            <td><span style={{display:'inline-block',padding:'2px 8px',borderRadius:4,background:statusColor+'22',color:statusColor,fontSize:'0.8rem',fontWeight:600}}>{order.status}</span></td>
+                            <td><span style={{display:'inline-block',padding:'2px 8px',borderRadius:4,background:statusColor+'22',color:statusColor,fontSize:'0.8rem',fontWeight:600}}>{order.status}</span><div className="meta">{order.manager_name || 'без менеджера'}</div></td>
                             <td style={{textAlign:'right'}}>{order.items_count}</td>
                             <td style={{textAlign:'right'}}>{currency.format(order.total_qty)}</td>
                             <td style={{textAlign:'right'}} onClick={e => e.stopPropagation()}>
@@ -3247,9 +3298,14 @@ export function App() {
                                 {isOpen ? 'Свернуть' : 'Открыть'}
                               </button>
                               <button className="ghost-btn" style={{fontSize:'0.8rem',padding:'3px 8px',color: order.status==='completed'?'#22c55e':undefined}}
-                                disabled={order.status === 'completed'}
-                                onClick={() => fetchJSON(apiUrl(`/api/orders/${order.id}/complete`), {method:'POST'}).then(loadOrders)}>
+                                disabled={order.status === 'completed' || order.status === 'cancelled'}
+                                onClick={() => fetchJSON(apiUrl(`/api/orders/${order.id}/complete`), {method:'POST'}).then(async () => { await loadOrders(); if (openOrder?.batch.id === order.id) await openOrderDetail(order.id); })}>
                                 {order.status === 'completed' ? 'Выполнена' : 'Выполнить'}
+                              </button>
+                              <button className="ghost-btn" style={{fontSize:'0.8rem',padding:'3px 8px',color:'#ef4444'}}
+                                disabled={order.status === 'completed' || order.status === 'cancelled'}
+                                onClick={() => fetchJSON(apiUrl(`/api/orders/${order.id}/cancel`), {method:'POST'}).then(async () => { await loadOrders(); if (openOrder?.batch.id === order.id) await openOrderDetail(order.id); })}>
+                                Удалить
                               </button>
                             </td>
                           </tr>
@@ -3268,6 +3324,7 @@ export function App() {
                     <span className="eyebrow">Заявка #{openOrder.batch.id}</span>
                     {openOrder.batch.batch_name && <span style={{fontWeight:700,fontSize:'0.95rem',color:'#e2e8f0'}}>{openOrder.batch.batch_name}</span>}
                     <span className="meta">{openOrder.items.length} позиций</span>
+                    <span className="meta">Менеджер: {openOrder.batch.manager_name || '—'}</span>
                   </div>
                   <div style={{display:'flex',gap:8,alignItems:'center'}}>
                     <button
@@ -3521,7 +3578,7 @@ export function App() {
                         <td style={{fontSize: '0.85em'}}>{row.subgroup || '—'}</td>
                         <td style={{fontSize: '0.82em'}}>{row.supplier_name || '—'}</td>
                         <td><ClassBadge abc={row.abc_class || ''} xyz={row.xyz_class || ''} /></td>
-                        <td style={{textAlign: 'right'}}>{currency.format(row.available_qty || 0)}</td>
+                        <td style={{textAlign: 'right'}}>{currency.format(row.available_qty || 0)}{(row.in_delivery_qty || 0) > 0 ? ` (${currency.format(row.in_delivery_qty || 0)})` : ''}</td>
                         <td style={{textAlign: 'right', fontWeight: 700, color: row.to_order ? '#f1f5f9' : '#475569'}}>
                           {row.to_order ? currency.format(row.to_order) : '—'}
                         </td>
@@ -3912,8 +3969,9 @@ export function App() {
                             }
                           </td>
                           <td style={{padding: '7px 10px', textAlign: 'right', fontWeight: 600, color: item.qty > 0 ? '#22c55e' : '#334155'}}>
-                            <div>{item.qty > 0 ? item.qty.toLocaleString('ru-RU') : '—'}</div>
+                            <div>{item.qty > 0 ? item.qty.toLocaleString('ru-RU') : '—'}{(item.in_delivery_qty || 0) > 0 ? ` (${Number(item.in_delivery_qty || 0).toLocaleString('ru-RU')} в доставке)` : ''}</div>
                             {(recommendedOrder > 0) && <div style={{fontSize:'0.72em', color:'#f59e0b', fontWeight:700}}>рекомендуется дозакупить</div>}
+                            {(item.active_order_count || 0) > 0 && <div style={{fontSize:'0.72em', color:'#60a5fa'}}>есть открытая заявка</div>}
                           </td>
                           <td style={{padding: '7px 10px', textAlign: 'right', fontWeight: 700, whiteSpace:'nowrap'}}>
                             {(() => {
@@ -3990,13 +4048,23 @@ export function App() {
         {tab === 'draftOrder' && (
           <section className="card orders-card" style={{display:'flex',flexDirection:'column',height:'calc(100vh - 56px)',overflow:'hidden',padding:0}}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px',borderBottom:'1px solid #1e293b',flexShrink:0,gap:12,flexWrap:'wrap'}}>
-              <div style={{display:'flex',alignItems:'center',gap:12,flex:1,minWidth:0}}>
+              <div style={{display:'flex',alignItems:'center',gap:12,flex:1,minWidth:0,flexWrap:'wrap'}}>
                 <h2 style={{margin:0,fontSize:'1rem',fontWeight:700,flexShrink:0}}>Заявка</h2>
                 <input
                   value={c2OrderName}
                   onChange={e => setC2OrderName(e.target.value)}
                   placeholder="Название заявки (обязательно)…"
-                  style={{flex:1,minWidth:0,background:'#0f172a',border:`1px solid ${draftCartValidated && !c2OrderName.trim() ? '#ef4444' : '#334155'}`,borderRadius:6,color:'#f1f5f9',padding:'5px 10px',fontSize:'0.85rem',outline:'none'}}
+                  style={{flex:1,minWidth:220,background:'#0f172a',border:`1px solid ${draftCartValidated && !c2OrderName.trim() ? '#ef4444' : '#334155'}`,borderRadius:6,color:'#f1f5f9',padding:'5px 10px',fontSize:'0.85rem',outline:'none'}}
+                />
+                <select value={selectedManager} onChange={e => setSelectedManager(e.target.value)} style={{minWidth:180,background:'#0f172a',border:`1px solid ${draftCartValidated && !selectedManager && !newManagerName.trim() ? '#ef4444' : '#334155'}`,borderRadius:6,color:'#f1f5f9',padding:'5px 10px',fontSize:'0.85rem'}}>
+                  <option value="">Выбери менеджера</option>
+                  {managers.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                </select>
+                <input
+                  value={newManagerName}
+                  onChange={e => setNewManagerName(e.target.value)}
+                  placeholder="или добавить нового"
+                  style={{minWidth:180,background:'#0f172a',border:'1px solid #334155',borderRadius:6,color:'#f1f5f9',padding:'5px 10px',fontSize:'0.85rem',outline:'none'}}
                 />
                 <span className="meta" style={{flexShrink:0}}>{draftCart.size} поз.</span>
               </div>
@@ -4006,9 +4074,9 @@ export function App() {
               </button>
             </div>
 
-            {draftCartValidated && Array.from(draftCart.values()).some(e => e.qty !== e.recommendedOrder && !e.reason.trim()) && (
+            {draftCartValidated && ((Array.from(draftCart.values()).some(e => e.qty !== e.recommendedOrder && !e.reason.trim())) || (!selectedManager && !newManagerName.trim())) && (
               <div style={{padding:'8px 16px',background:'rgba(239,68,68,.1)',borderBottom:'1px solid rgba(239,68,68,.3)',fontSize:'0.83em',color:'#f87171',flexShrink:0}}>
-                ⚠ Заполните причины отклонения для позиций, где количество отличается от рекомендованного.
+                ⚠ Выбери менеджера и заполни причины отклонения для позиций, где количество отличается от рекомендованного.
               </div>
             )}
 
