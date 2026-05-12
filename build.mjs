@@ -8,7 +8,7 @@ const DEV_TEMPLATE = `<!doctype html>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Zakup Manager</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script async src="https://telegram.org/js/telegram-web-app.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Prata&display=swap" rel="stylesheet">
@@ -25,6 +25,9 @@ writeFileSync('index.html', DEV_TEMPLATE);
 
 // Run Vite build
 execSync('npx vite build', { stdio: 'inherit' });
+
+// Create dist/config.js (runtime backend URL override; empty = use relative API paths)
+writeFileSync('dist/config.js', 'window.BACKEND_URL = "";\n');
 
 // Inject config.js script into dist/index.html (before the main module script)
 let html = readFileSync('dist/index.html', 'utf8');

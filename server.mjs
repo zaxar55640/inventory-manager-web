@@ -791,10 +791,22 @@ app.get('/api/catalog2/items', (req, res) => {
       conditions.push('cp.item_code IN (SELECT item_ref FROM purchase_recommendations WHERE supplier_name = ?)');
       params.push(String(req.query.supplier));
     }
+    if (req.query.pre_season === '1') {
+      const curM = new Date().getMonth() + 1;
+      const upcoming = [1, 2, 3].map(d => ((curM - 1 + d) % 12) + 1);
+      const peakLikes = upcoming.map(() => `cf.peak_months LIKE ?`).join(' OR ');
+      conditions.push(`(${peakLikes})`);
+      conditions.push(`CAST(COALESCE(cf.to_order, 0) AS INTEGER) > 0`);
+      params.push(...upcoming.map(m => `%${m}%`));
+    }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const needsCfJoin = req.query.pre_season === '1';
+    const countJoins = needsCfJoin
+      ? `LEFT JOIN _sales_cache ls ON ls.item_code = cp.item_code LEFT JOIN catalog_forecast cf ON cf.item_code = cp.item_code`
+      : '';
 
-    const total = stmt(`SELECT COUNT(*) AS cnt FROM catalog_products cp ${where}`).get(...params).cnt;
+    const total = stmt(`SELECT COUNT(*) AS cnt FROM catalog_products cp ${countJoins} ${where}`).get(...params).cnt;
     const items = stmt(`
       SELECT cp.id, cp.item_code, cp.item_name, cp.barcode, cp.article, cp.qty, cp.reserve,
              cp.retail_price, cp.purchase_price, cp.parent_name, cp.variant,
@@ -1498,6 +1510,156 @@ app.use(express.static(distDir, {
     res.setHeader('Surrogate-Control', 'no-store');
   }
 }));
+app.get('/api/analytics/weekly', (req, res) => {
+  try {
+    const fmt = d => d.toISOString().split('T')[0];
+    const shiftYear = (dateStr, years) => {
+      const d = new Date(dateStr + 'T12:00:00');
+      return fmt(new Date(d.getFullYear() + years, d.getMonth(), d.getDate()));
+    };
+
+    // Accept explicit from/to or fall back to last complete Mon-Sun week
+    let from = String(req.query.from || '');
+    let to   = String(req.query.to   || '');
+    if (!from || !to) {
+      const today = new Date();
+      const dow = today.getDay();
+      const daysToMon = dow === 0 ? 6 : dow - 1;
+      const thisMon = new Date(today); thisMon.setDate(today.getDate() - daysToMon);
+      const lastMon = new Date(thisMon); lastMon.setDate(thisMon.getDate() - 7);
+      const lastSun = new Date(lastMon); lastSun.setDate(lastMon.getDate() + 6);
+      from = fmt(lastMon);
+      to   = fmt(lastSun);
+    }
+
+    const fromLY = shiftYear(from, -1), toLY = shiftYear(to, -1);
+    const from2Y = shiftYear(from, -2), to2Y = shiftYear(to, -2);
+
+    // Path filter
+    const pathStr = String(req.query.path || '');
+    const pathParts = pathStr ? pathStr.split(' / ') : [];
+    const { where: pw, params: pp } = catalogPathWhere(pathParts);
+    const depth = pathParts.length;
+    const childCol = `group_l${depth}`;
+    const cpAnd = pw ? `AND ${pw.replace(/\b(group_l\d+|parent_name)\b/g, 'cp.$1')}` : '';
+
+    // Totals: all metrics in one query
+    const totals = stmt(`
+      SELECT
+        SUM(CASE WHEN cs.sale_date BETWEEN ? AND ? THEN cs.sales_qty-cs.return_qty ELSE 0 END) AS qty_this,
+        SUM(CASE WHEN cs.sale_date BETWEEN ? AND ? THEN cs.sales_qty-cs.return_qty ELSE 0 END) AS qty_ly,
+        SUM(CASE WHEN cs.sale_date BETWEEN ? AND ? THEN cs.sales_qty-cs.return_qty ELSE 0 END) AS qty_2y,
+        COUNT(DISTINCT CASE WHEN cs.sale_date BETWEEN ? AND ? THEN cs.item_code END) AS sku_this,
+        COUNT(DISTINCT CASE WHEN cs.sale_date BETWEEN ? AND ? THEN cs.item_code END) AS sku_ly,
+        SUM(CASE WHEN cs.sale_date BETWEEN ? AND ? THEN (cs.sales_qty-cs.return_qty)*COALESCE(cp.retail_price,0) ELSE 0 END) AS rev_this,
+        SUM(CASE WHEN cs.sale_date BETWEEN ? AND ? THEN (cs.sales_qty-cs.return_qty)*COALESCE(cp.retail_price,0) ELSE 0 END) AS rev_ly
+      FROM catalog_sales cs
+      LEFT JOIN catalog_products cp ON cp.item_code = cs.item_code
+      WHERE ((cs.sale_date BETWEEN ? AND ?) OR (cs.sale_date BETWEEN ? AND ?) OR (cs.sale_date BETWEEN ? AND ?))
+        ${cpAnd}
+    `).get(
+      from, to, fromLY, toLY, from2Y, to2Y,
+      from, to, fromLY, toLY,
+      from, to, fromLY, toLY,
+      from, to, fromLY, toLY, from2Y, to2Y,
+      ...pp
+    );
+
+    // Next-level children breakdown (clickable for drill-down)
+    const children = depth <= 8 ? stmt(`
+      SELECT
+        cp.${childCol} AS name,
+        SUM(CASE WHEN cs.sale_date BETWEEN ? AND ? THEN cs.sales_qty-cs.return_qty ELSE 0 END) AS qty_this,
+        SUM(CASE WHEN cs.sale_date BETWEEN ? AND ? THEN cs.sales_qty-cs.return_qty ELSE 0 END) AS qty_ly,
+        SUM(CASE WHEN cs.sale_date BETWEEN ? AND ? THEN (cs.sales_qty-cs.return_qty)*COALESCE(cp.retail_price,0) ELSE 0 END) AS rev_this
+      FROM catalog_sales cs
+      JOIN catalog_products cp ON cp.item_code = cs.item_code
+      WHERE ((cs.sale_date BETWEEN ? AND ?) OR (cs.sale_date BETWEEN ? AND ?))
+        AND cp.${childCol} IS NOT NULL
+        ${cpAnd}
+      GROUP BY cp.${childCol}
+      ORDER BY qty_this DESC
+      LIMIT 20
+    `).all(from, to, fromLY, toLY, from, to, from, to, fromLY, toLY, ...pp) : [];
+
+    // Top 30 selling items in this path
+    const topItems = stmt(`
+      SELECT cs.item_code, cp.item_name, cp.group_l1,
+             SUM(CASE WHEN cs.sale_date BETWEEN ? AND ? THEN cs.sales_qty-cs.return_qty ELSE 0 END) AS qty_this,
+             SUM(CASE WHEN cs.sale_date BETWEEN ? AND ? THEN cs.sales_qty-cs.return_qty ELSE 0 END) AS qty_ly,
+             SUM(CASE WHEN cs.sale_date BETWEEN ? AND ? THEN (cs.sales_qty-cs.return_qty)*COALESCE(cp.retail_price,0) ELSE 0 END) AS rev_this
+      FROM catalog_sales cs
+      LEFT JOIN catalog_products cp ON cp.item_code = cs.item_code
+      WHERE ((cs.sale_date BETWEEN ? AND ?) OR (cs.sale_date BETWEEN ? AND ?))
+        ${cpAnd}
+      GROUP BY cs.item_code
+      HAVING qty_this > 0
+      ORDER BY qty_this DESC
+      LIMIT 30
+    `).all(from, to, fromLY, toLY, from, to, from, to, fromLY, toLY, ...pp);
+
+    // Items that had a gap >60 days before the period and then sold during it
+    const nlqSold = stmt(`
+      WITH period_sold AS (
+        SELECT cs.item_code, SUM(cs.sales_qty-cs.return_qty) AS net_qty
+        FROM catalog_sales cs
+        JOIN catalog_products cp ON cp.item_code = cs.item_code
+        WHERE cs.sale_date BETWEEN ? AND ?
+          ${cpAnd}
+        GROUP BY cs.item_code HAVING net_qty > 0
+      ),
+      prev_sale AS (
+        SELECT item_code,
+               ROUND(julianday(?) - julianday(MAX(sale_date))) AS days_gap
+        FROM catalog_sales
+        WHERE sale_date < ?
+          AND item_code IN (SELECT item_code FROM period_sold)
+        GROUP BY item_code
+      )
+      SELECT ws.item_code, cp.item_name, cp.group_l1,
+             ROUND(ws.net_qty,1) AS net_qty,
+             ps.days_gap,
+             ROUND(ws.net_qty*COALESCE(cp.retail_price,0)) AS revenue
+      FROM period_sold ws
+      JOIN prev_sale ps ON ps.item_code = ws.item_code
+      LEFT JOIN catalog_products cp ON cp.item_code = ws.item_code
+      WHERE ps.days_gap > 60
+      ORDER BY ps.days_gap DESC
+      LIMIT 100
+    `).all(from, to, ...pp, from, from);
+
+    // Daily aggregation for trend chart
+    const dailySales = stmt(`
+      SELECT cs.sale_date AS date,
+             ROUND(SUM(cs.sales_qty-cs.return_qty), 1) AS qty,
+             ROUND(SUM((cs.sales_qty-cs.return_qty)*COALESCE(cp.retail_price,0))) AS rev
+      FROM catalog_sales cs
+      LEFT JOIN catalog_products cp ON cp.item_code = cs.item_code
+      WHERE cs.sale_date BETWEEN ? AND ?
+        ${cpAnd}
+      GROUP BY cs.sale_date
+      ORDER BY cs.sale_date
+    `).all(from, to, ...pp);
+
+    const dailySalesLY = stmt(`
+      SELECT cs.sale_date AS date,
+             ROUND(SUM(cs.sales_qty-cs.return_qty), 1) AS qty,
+             ROUND(SUM((cs.sales_qty-cs.return_qty)*COALESCE(cp.retail_price,0))) AS rev
+      FROM catalog_sales cs
+      LEFT JOIN catalog_products cp ON cp.item_code = cs.item_code
+      WHERE cs.sale_date BETWEEN ? AND ?
+        ${cpAnd}
+      GROUP BY cs.sale_date
+      ORDER BY cs.sale_date
+    `).all(fromLY, toLY, ...pp);
+
+    res.json({ period: { from, to }, path: pathStr, totals, children, topItems, nlqSold, dailySales, dailySalesLY });
+  } catch (err) {
+    console.error('/api/analytics/weekly', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('*', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');

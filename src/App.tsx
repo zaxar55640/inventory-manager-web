@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {Fragment, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {MouseEvent as ReactMouseEvent} from 'react';
 import {apiUrl} from './config';
 
@@ -1551,16 +1551,35 @@ function AnalyticsDrillList({drillKey, items, total, loading, onClose, onNavigat
 function BreakdownTable({segments, loading, onNavigate, onOpenCatalog}: {
   segments: C2AnalyticsSegment[]; loading?: boolean; onNavigate: (segment: C2AnalyticsSegment) => void; onOpenCatalog: (path: string) => void;
 }) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [subCache, setSubCache] = useState<Map<string, C2AnalyticsSegment[]>>(new Map());
+  const [subLoading, setSubLoading] = useState<Set<string>>(new Set());
+
   if (!segments.length) return null;
   const statusColor = (s: string) => s==='healthy'?'#22c55e':s==='deficit'?'#ef4444':'#f59e0b';
   const statusLabel = (s: string) => s==='healthy'?'Норм':s==='deficit'?'Дефицит':s==='overstock'?'Перестой':'Мёртвый';
+
+  const toggleExpand = async (seg: C2AnalyticsSegment, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = new Set(expanded);
+    if (next.has(seg.path)) { next.delete(seg.path); setExpanded(next); return; }
+    next.add(seg.path); setExpanded(next);
+    if (subCache.has(seg.path)) return;
+    setSubLoading(prev => new Set(prev).add(seg.path));
+    try {
+      const data = await fetch(apiUrl(`/api/catalog2/analytics?scope=subgroup&path=${encodeURIComponent(seg.path)}`)).then(r => r.json());
+      setSubCache(prev => new Map(prev).set(seg.path, data.segments || []));
+    } catch { setSubCache(prev => new Map(prev).set(seg.path, [])); }
+    finally { setSubLoading(prev => { const s = new Set(prev); s.delete(seg.path); return s; }); }
+  };
+
   return (
     <div style={{overflowX:'auto'}}>
       <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.8em'}}>
         <thead>
           <tr style={{background:'#0a1628'}}>
-            {['Сегмент','SKU','Продажи 30д','Покрытие дн.','Dead SKU','Статус'].map(h => (
-              <th key={h} style={{padding:'5px 8px',textAlign:h==='SKU'||h==='Продажи 30д'||h==='Покрытие дн.'||h==='Dead SKU'?'right':'left',color:'#64748b',fontWeight:500}}>{h}</th>
+            {['','Сегмент','SKU','Продажи 30д','Покрытие дн.','Dead SKU','Статус'].map(h => (
+              <th key={h} style={{padding:'5px 8px',textAlign:h==='SKU'||h==='Продажи 30д'||h==='Покрытие дн.'||h==='Dead SKU'?'right':'left',color:'#64748b',fontWeight:500,width:h===''?'22px':undefined}}>{h}</th>
             ))}
           </tr>
         </thead>
@@ -1573,39 +1592,719 @@ function BreakdownTable({segments, loading, onNavigate, onOpenCatalog}: {
               </td>
             </tr>
           )}
-          {segments.map((seg,i) => (
-            <tr key={seg.path} style={{borderBottom:'1px solid #1e293b',background:i%2===0?'rgba(255,255,255,.015)':undefined,cursor:'pointer'}}
-              onClick={() => onNavigate(seg)}
-              onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,.04)')}
-              onMouseLeave={e=>(e.currentTarget.style.background=i%2===0?'rgba(255,255,255,.015)':'')}>
-              <td style={{padding:'5px 8px',color:'#e2e8f0',fontWeight:500,maxWidth:240,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                <div style={{display:'flex',alignItems:'center',gap:8,justifyContent:'space-between'}}>
-                  <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{seg.name}</span>
-                  <button className="ghost-btn" style={{padding:'2px 7px',fontSize:'0.72em',flexShrink:0}}
-                    onClick={e=>{e.stopPropagation();onOpenCatalog(seg.path);}}>→ Каталог</button>
-                </div>
-              </td>
-              <td style={{padding:'5px 8px',textAlign:'right',color:'#64748b'}}>{num(seg.sku_count, '0')}</td>
-              <td style={{padding:'5px 8px',textAlign:'right',color:'#22c55e'}}>{num(Math.round(seg.sales_qty_30 || 0), '0')}</td>
-              <td style={{padding:'5px 8px',textAlign:'right',color:seg.coverage_days!==null&&seg.coverage_days<21?'#ef4444':seg.coverage_days!==null&&seg.coverage_days>180?'#f59e0b':'#94a3b8'}}>
-                {seg.coverage_days!==null?`${seg.coverage_days} дн.`:'—'}
-              </td>
-              <td style={{padding:'5px 8px',textAlign:'right',color:seg.dead_stock_sku>0?'#f87171':'#334155'}}>{seg.dead_stock_sku}</td>
-              <td style={{padding:'5px 8px'}}>
-                <span style={{padding:'2px 7px',borderRadius:4,background:statusColor(seg.healthy_status)+'22',color:statusColor(seg.healthy_status),fontWeight:600,fontSize:'0.88em'}}>
-                  {statusLabel(seg.healthy_status)}
-                </span>
-              </td>
-            </tr>
-          ))}
+          {segments.map((seg,i) => {
+            const isExp = expanded.has(seg.path);
+            const subs = subCache.get(seg.path) || [];
+            const isSubLoading = subLoading.has(seg.path);
+            return (
+              <Fragment key={seg.path}>
+                <tr style={{borderBottom: isExp ? 'none' : '1px solid #1e293b', background:i%2===0?'rgba(255,255,255,.015)':undefined, cursor:'pointer'}}
+                  onClick={() => onNavigate(seg)}
+                  onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,.04)')}
+                  onMouseLeave={e=>(e.currentTarget.style.background=i%2===0?'rgba(255,255,255,.015)':'')}>
+                  <td style={{padding:'5px 4px 5px 8px', width:22}}>
+                    <button onClick={e => toggleExpand(seg, e)}
+                      style={{background:'none',border:'none',cursor:'pointer',color:'#475569',fontSize:'0.9em',padding:0,lineHeight:1,width:16,textAlign:'center'}}
+                      title={isExp ? 'Свернуть подгруппы' : 'Показать подгруппы'}>
+                      {isExp ? '▾' : '▸'}
+                    </button>
+                  </td>
+                  <td style={{padding:'5px 8px',color:'#e2e8f0',fontWeight:500,maxWidth:240,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,justifyContent:'space-between'}}>
+                      <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{seg.name}</span>
+                      <button className="ghost-btn" style={{padding:'2px 7px',fontSize:'0.72em',flexShrink:0}}
+                        onClick={e=>{e.stopPropagation();onOpenCatalog(seg.path);}}>→ Каталог</button>
+                    </div>
+                  </td>
+                  <td style={{padding:'5px 8px',textAlign:'right',color:'#64748b'}}>{num(seg.sku_count, '0')}</td>
+                  <td style={{padding:'5px 8px',textAlign:'right',color:'#22c55e'}}>{num(Math.round(seg.sales_qty_30 || 0), '0')}</td>
+                  <td style={{padding:'5px 8px',textAlign:'right',color:seg.coverage_days!==null&&seg.coverage_days<21?'#ef4444':seg.coverage_days!==null&&seg.coverage_days>180?'#f59e0b':'#94a3b8'}}>
+                    {seg.coverage_days!==null?`${seg.coverage_days} дн.`:'—'}
+                  </td>
+                  <td style={{padding:'5px 8px',textAlign:'right',color:seg.dead_stock_sku>0?'#f87171':'#334155'}}>{seg.dead_stock_sku}</td>
+                  <td style={{padding:'5px 8px'}}>
+                    <span style={{padding:'2px 7px',borderRadius:4,background:statusColor(seg.healthy_status)+'22',color:statusColor(seg.healthy_status),fontWeight:600,fontSize:'0.88em'}}>
+                      {statusLabel(seg.healthy_status)}
+                    </span>
+                  </td>
+                </tr>
+                {isExp && (
+                  <tr style={{borderBottom:'1px solid #1e293b'}}>
+                    <td colSpan={7} style={{padding:'0 0 4px 32px', background:'rgba(99,102,241,.04)'}}>
+                      {isSubLoading ? (
+                        <div style={{padding:'8px 0',color:'#64748b',fontSize:'0.78em'}}>
+                          <span className="spinner" style={{display:'inline-block',width:11,height:11,marginRight:6,verticalAlign:'-1px'}}/>Загружаю подгруппы…
+                        </div>
+                      ) : subs.length === 0 ? (
+                        <div style={{padding:'6px 0',color:'#334155',fontSize:'0.76em'}}>Подгруппы не найдены</div>
+                      ) : (
+                        <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.9em'}}>
+                          <tbody>
+                            {subs.map(sub => (
+                              <tr key={sub.path}
+                                style={{cursor:'pointer',borderBottom:'1px solid rgba(255,255,255,.04)'}}
+                                onClick={() => onNavigate(sub)}
+                                onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,.05)')}
+                                onMouseLeave={e=>(e.currentTarget.style.background='')}>
+                                <td style={{padding:'4px 8px 4px 0',color:'#cbd5e1',maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                                  <span style={{color:'#334155',marginRight:5}}>└</span>{sub.name}
+                                </td>
+                                <td style={{padding:'4px 8px',textAlign:'right',color:'#475569',whiteSpace:'nowrap'}}>{num(sub.sku_count,'0')} SKU</td>
+                                <td style={{padding:'4px 8px',textAlign:'right',color:'#22c55e',whiteSpace:'nowrap'}}>{num(Math.round(sub.sales_qty_30||0),'0')} прод.</td>
+                                <td style={{padding:'4px 8px',textAlign:'right',color:sub.coverage_days!==null&&sub.coverage_days<21?'#ef4444':sub.coverage_days!==null&&sub.coverage_days>180?'#f59e0b':'#475569',whiteSpace:'nowrap'}}>
+                                  {sub.coverage_days!==null?`${sub.coverage_days} дн.`:'—'}
+                                </td>
+                                <td style={{padding:'4px 8px',whiteSpace:'nowrap'}}>
+                                  <span style={{padding:'1px 6px',borderRadius:3,background:statusColor(sub.healthy_status)+'22',color:statusColor(sub.healthy_status),fontSize:'0.85em'}}>
+                                    {statusLabel(sub.healthy_status)}
+                                  </span>
+                                </td>
+                                <td style={{padding:'4px 4px 4px 8px'}}>
+                                  <button className="ghost-btn" style={{padding:'1px 6px',fontSize:'0.7em'}}
+                                    onClick={e=>{e.stopPropagation();onOpenCatalog(sub.path);}}>→ Каталог</button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
 }
 
+// ─ Weekly Report ─────────────────────────────────────────────────────────────
+
+type WeeklyChild    = { name: string; qty_this: number; qty_ly: number; rev_this: number };
+type WeeklyTopItem  = { item_code: string; item_name: string; group_l1: string; qty_this: number; qty_ly: number; rev_this: number };
+type WeeklyNlqItem  = { item_code: string; item_name: string; group_l1: string; net_qty: number; days_gap: number; revenue: number };
+type DailySalePoint = { date: string; qty: number; rev: number };
+
+type WeeklyData = {
+  period: { from: string; to: string };
+  path: string;
+  totals: { qty_this: number; qty_ly: number; qty_2y: number; sku_this: number; sku_ly: number; rev_this: number; rev_ly: number };
+  children: WeeklyChild[];
+  topItems: WeeklyTopItem[];
+  nlqSold: WeeklyNlqItem[];
+  dailySales: DailySalePoint[];
+  dailySalesLY: DailySalePoint[];
+};
+
+function pct(a: number, b: number) {
+  if (!b) return null;
+  return Math.round((a - b) / b * 100);
+}
+
+function DeltaBadge({ val }: { val: number | null }) {
+  if (val === null) return null;
+  const color = val > 0 ? '#22c55e' : val < 0 ? '#ef4444' : '#64748b';
+  const arrow = val > 0 ? '↑' : val < 0 ? '↓' : '→';
+  return (
+    <span style={{ fontSize: '0.75em', color, fontWeight: 600, whiteSpace: 'nowrap' }}>
+      {arrow}{Math.abs(val)}%
+    </span>
+  );
+}
+
+// ─ Chart helpers ────────────────────────────────────────────────────────────
+
+function TrendChart({ dailySales, dailySalesLY, from, to, metric }: {
+  dailySales: DailySalePoint[]; dailySalesLY: DailySalePoint[];
+  from: string; to: string; metric: 'qty' | 'rev';
+}) {
+  const [hovIdx, setHovIdx] = useState<number | null>(null);
+
+  const buildDates = (f: string, t: string) => {
+    const out: string[] = [];
+    let d = new Date(f + 'T12:00:00');
+    const end = new Date(t + 'T12:00:00');
+    while (d <= end) { out.push(d.toISOString().split('T')[0]); d = new Date(d); d.setDate(d.getDate() + 1); }
+    return out;
+  };
+  const lyFrom = (() => { const d = new Date(from + 'T12:00:00'); d.setFullYear(d.getFullYear() - 1); return d.toISOString().split('T')[0]; })();
+  const lyTo   = (() => { const d = new Date(to   + 'T12:00:00'); d.setFullYear(d.getFullYear() - 1); return d.toISOString().split('T')[0]; })();
+
+  const dates   = buildDates(from, to);
+  const lyDates = buildDates(lyFrom, lyTo);
+
+  const thisMap = new Map(dailySales.map(d   => [d.date, d]));
+  const lyMap   = new Map(dailySalesLY.map(d => [d.date, d]));
+  const getV = (row: DailySalePoint | undefined) => row ? (metric === 'qty' ? row.qty : row.rev) : 0;
+
+  const thisVals = dates.map(d => getV(thisMap.get(d)));
+  const lyVals   = lyDates.map(d => getV(lyMap.get(d)));
+
+  const W = 1000, H = 120;
+  const PAD = { t: 12, r: 8, b: 22, l: 8 };
+  const iW = W - PAD.l - PAD.r, iH = H - PAD.t - PAD.b;
+  const n = dates.length;
+  const maxV = Math.max(...thisVals, ...lyVals, 1);
+
+  const xOf = (i: number) => PAD.l + (n > 1 ? (i / (n - 1)) * iW : iW / 2);
+  const yOf = (v: number) => PAD.t + iH - (v / maxV) * iH;
+
+  const mkLine = (vals: number[]) =>
+    vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ');
+  const mkArea = (vals: number[]) => {
+    if (!vals.length) return '';
+    return `${mkLine(vals)} L${xOf(vals.length - 1).toFixed(1)},${yOf(0).toFixed(1)} L${xOf(0).toFixed(1)},${yOf(0).toFixed(1)} Z`;
+  };
+
+  const fmtD = (s: string) => new Date(s + 'T12:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  const fmtV = (v: number) => metric === 'qty'
+    ? Math.round(v).toLocaleString('ru') + ' шт'
+    : v >= 1e6 ? (v / 1e6).toFixed(2) + ' млн ₽' : Math.round(v).toLocaleString('ru') + ' ₽';
+
+  const handleMM = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const svgX = (e.clientX - rect.left) / rect.width * W;
+    const i = Math.round((svgX - PAD.l) / iW * (n - 1));
+    setHovIdx(Math.max(0, Math.min(n - 1, i)));
+  };
+
+  const hov = hovIdx !== null && dates[hovIdx] != null ? {
+    x: xOf(hovIdx), val: thisVals[hovIdx], date: dates[hovIdx],
+    valLY: lyVals[Math.min(hovIdx, lyVals.length - 1)] ?? 0,
+  } : null;
+  const tx = hov ? Math.min(hov.x + 10, W - 145) : 0;
+
+  const monthTicks: { x: number; label: string }[] = [];
+  dates.forEach((d, i) => {
+    if (i > 0 && i < n - 1 && new Date(d + 'T12:00:00').getDate() === 1)
+      monthTicks.push({ x: xOf(i), label: fmtD(d) });
+  });
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: H, display: 'block', cursor: 'crosshair' }}
+      onMouseMove={handleMM} onMouseLeave={() => setHovIdx(null)}>
+      <defs>
+        <linearGradient id="wTG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.02" />
+        </linearGradient>
+      </defs>
+      {[0.25, 0.5, 0.75].map(f => (
+        <line key={f} x1={PAD.l} y1={PAD.t + iH * (1 - f)} x2={W - PAD.r} y2={PAD.t + iH * (1 - f)} stroke="#0d1e38" strokeWidth="1" />
+      ))}
+      <path d={mkArea(lyVals)} fill="rgba(100,116,139,0.07)" />
+      <path d={mkLine(lyVals)} fill="none" stroke="rgba(100,116,139,0.45)" strokeWidth="1.5" strokeDasharray="5 3" />
+      <path d={mkArea(thisVals)} fill="url(#wTG)" />
+      <path d={mkLine(thisVals)} fill="none" stroke="#3b82f6" strokeWidth="2" />
+      <line x1={PAD.l} y1={yOf(0)} x2={W - PAD.r} y2={yOf(0)} stroke="#1e293b" strokeWidth="1" />
+      {hov && <line x1={hov.x} y1={PAD.t} x2={hov.x} y2={yOf(0)} stroke="#334155" strokeWidth="1" strokeDasharray="3 2" />}
+      {monthTicks.map(t => (
+        <g key={t.x}>
+          <line x1={t.x} y1={yOf(0)} x2={t.x} y2={yOf(0) + 4} stroke="#1e293b" strokeWidth="1" />
+          <text x={t.x} y={H - 2} fontSize="10" fill="#1e3a5f" textAnchor="middle">{t.label}</text>
+        </g>
+      ))}
+      {n > 0 && (
+        <>
+          <text x={PAD.l} y={H - 2} fontSize="11" fill="#334155">{fmtD(dates[0])}</text>
+          <text x={W - PAD.r} y={H - 2} fontSize="11" fill="#334155" textAnchor="end">{fmtD(dates[n - 1])}</text>
+        </>
+      )}
+      {hov && (
+        <>
+          <circle cx={hov.x} cy={yOf(hov.val)} r="3.5" fill="#3b82f6" />
+          <rect x={tx} y={PAD.t} width={136} height={hov.valLY > 0 ? 44 : 30} rx="4" fill="#0a1e3a" stroke="#1e3a5f" strokeWidth="1" />
+          <text x={tx + 8} y={PAD.t + 13} fontSize="10" fill="#64748b">{fmtD(hov.date)}</text>
+          <text x={tx + 8} y={PAD.t + 26} fontSize="11" fill="#60a5fa" fontWeight="600">{fmtV(hov.val)}</text>
+          {hov.valLY > 0 && <text x={tx + 8} y={PAD.t + 39} fontSize="10" fill="#475569">ГН: {fmtV(hov.valLY)}</text>}
+        </>
+      )}
+    </svg>
+  );
+}
+
+function GroupDonut({ groups, onDrill }: { groups: WeeklyChild[]; onDrill: (name: string) => void }) {
+  const [hovered, setHovered] = useState<string | null>(null);
+  const top = groups.filter(c => c.qty_this > 0).slice(0, 10);
+  const total = top.reduce((s, c) => s + c.qty_this, 0);
+  if (!total || top.length < 2) return null;
+
+  const COLORS = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#a855f7','#06b6d4','#f97316','#84cc16','#ec4899','#14b8a6'];
+  const R = 54, ri = 34, CX = 70, CY = 70;
+
+  let angle = -Math.PI / 2;
+  const slices = top.map((c, i) => {
+    const frac = c.qty_this / total;
+    const a0 = angle; angle += frac * 2 * Math.PI; const a1 = angle;
+    const large = frac > 0.5 ? 1 : 0;
+    const mkPath = (outerR: number) => {
+      const c0 = [Math.cos(a0), Math.sin(a0)], c1 = [Math.cos(a1), Math.sin(a1)];
+      return [
+        `M${(CX + outerR * c0[0]).toFixed(2)},${(CY + outerR * c0[1]).toFixed(2)}`,
+        `A${outerR},${outerR} 0 ${large},1 ${(CX + outerR * c1[0]).toFixed(2)},${(CY + outerR * c1[1]).toFixed(2)}`,
+        `L${(CX + ri * c1[0]).toFixed(2)},${(CY + ri * c1[1]).toFixed(2)}`,
+        `A${ri},${ri} 0 ${large},0 ${(CX + ri * c0[0]).toFixed(2)},${(CY + ri * c0[1]).toFixed(2)}`,
+        'Z',
+      ].join(' ');
+    };
+    return { c, i, frac, color: COLORS[i % COLORS.length], mkPath };
+  });
+
+  const fmtK = (v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : Math.round(v).toString();
+
+  return (
+    <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+      <svg width={140} height={140} viewBox="0 0 140 140" style={{ flexShrink: 0 }}>
+        {slices.map(s => (
+          <path key={s.i} d={s.mkPath(hovered === s.c.name ? R + 5 : R)}
+            fill={s.color} opacity={hovered && hovered !== s.c.name ? 0.3 : 0.88}
+            style={{ cursor: 'pointer' }}
+            onClick={() => onDrill(s.c.name)}
+            onMouseEnter={() => setHovered(s.c.name)}
+            onMouseLeave={() => setHovered(null)} />
+        ))}
+        <circle cx={CX} cy={CY} r={ri - 1} fill="#0a1628" />
+        <text x={CX} y={CY - 6} textAnchor="middle" fontSize="10" fill="#334155">итого</text>
+        <text x={CX} y={CY + 8} textAnchor="middle" fontSize="14" fill="#e2e8f0" fontWeight="700">{fmtK(total)}</text>
+        <text x={CX} y={CY + 21} textAnchor="middle" fontSize="9" fill="#334155">шт</text>
+      </svg>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 5, paddingTop: 6, minWidth: 0 }}>
+        {slices.map(s => (
+          <div key={s.i}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+              opacity: hovered && hovered !== s.c.name ? 0.3 : 1 }}
+            onClick={() => onDrill(s.c.name)}
+            onMouseEnter={() => setHovered(s.c.name)}
+            onMouseLeave={() => setHovered(null)}>
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0 }} />
+            <span style={{ color: '#94a3b8', fontSize: '0.7em', flex: 1, overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.c.name}>{s.c.name}</span>
+            <span style={{ color: '#475569', fontSize: '0.7em', whiteSpace: 'nowrap' }}>
+              {Math.round(s.frac * 100)}%
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const WEEKLY_PRESETS = [
+  { key: 'week',       label: 'Прошл. нед'  },
+  { key: 'this_month', label: 'Этот мес'    },
+  { key: 'last_month', label: 'Прошл. мес'  },
+  { key: '3m',         label: '3 мес'       },
+  { key: '6m',         label: '6 мес'       },
+  { key: '12m',        label: '12 мес'      },
+  { key: 'custom',     label: 'Период...'   },
+];
+
+function getPresetRange(preset: string): { from: string; to: string } {
+  const fmt = (d: Date) => d.toISOString().split('T')[0];
+  const today = new Date();
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+
+  if (preset === 'week') {
+    const dow = today.getDay();
+    const daysToMon = dow === 0 ? 6 : dow - 1;
+    const thisMon = new Date(today); thisMon.setDate(today.getDate() - daysToMon);
+    const lastMon = new Date(thisMon); lastMon.setDate(thisMon.getDate() - 7);
+    const lastSun = new Date(lastMon); lastSun.setDate(lastMon.getDate() + 6);
+    return { from: fmt(lastMon), to: fmt(lastSun) };
+  }
+  if (preset === 'this_month') {
+    const first = new Date(today.getFullYear(), today.getMonth(), 1);
+    return { from: fmt(first), to: fmt(yesterday) };
+  }
+  if (preset === 'last_month') {
+    const first = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const last  = new Date(today.getFullYear(), today.getMonth(), 0);
+    return { from: fmt(first), to: fmt(last) };
+  }
+  if (preset === '3m') {
+    const start = new Date(today); start.setMonth(today.getMonth() - 3);
+    return { from: fmt(start), to: fmt(yesterday) };
+  }
+  if (preset === '6m') {
+    const start = new Date(today); start.setMonth(today.getMonth() - 6);
+    return { from: fmt(start), to: fmt(yesterday) };
+  }
+  if (preset === '12m') {
+    const start = new Date(today); start.setFullYear(today.getFullYear() - 1);
+    return { from: fmt(start), to: fmt(yesterday) };
+  }
+  return { from: fmt(yesterday), to: fmt(yesterday) };
+}
+
+function WeeklyReport({ onOpenCatalog }: { onOpenCatalog?: (path: string) => void }) {
+  const [wPath, setWPath] = useState('');
+  const [preset, setPreset] = useState('week');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [data, setData] = useState<WeeklyData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [nlqOpen, setNlqOpen] = useState(false);
+  const [topOpen, setTopOpen] = useState(true);
+  const [chartMetric, setChartMetric] = useState<'qty' | 'rev'>('qty');
+
+  useEffect(() => {
+    let range: { from: string; to: string };
+    if (preset === 'custom') {
+      if (!customFrom || !customTo) return;
+      range = { from: customFrom, to: customTo };
+    } else {
+      range = getPresetRange(preset);
+    }
+    setLoading(true);
+    setData(null);
+    const params = new URLSearchParams({ from: range.from, to: range.to });
+    if (wPath) params.set('path', wPath);
+    fetch(apiUrl(`/api/analytics/weekly?${params}`))
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [wPath, preset, customFrom, customTo]);
+
+  const drill = (name: string) => {
+    setWPath(p => p ? `${p} / ${name}` : name);
+    setNlqOpen(false);
+    setTopOpen(true);
+  };
+
+  const navigateUp = (toDepth: number) => {
+    setWPath(p => p.split(' / ').slice(0, toDepth).join(' / '));
+    setNlqOpen(false);
+    setTopOpen(true);
+  };
+
+  const fmtDate = (s: string) => new Date(s + 'T12:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  const fmtRev  = (v: number) => v >= 1e6 ? `${(v / 1e6).toFixed(2)} млн ₽` : `${Math.round(v).toLocaleString('ru-RU')} ₽`;
+  const fmtNum  = (v: number) => v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+
+  const pathParts = wPath ? wPath.split(' / ') : [];
+  const maxQty = data && data.children.length > 0
+    ? Math.max(...data.children.map(c => Math.max(c.qty_this, c.qty_ly)), 1)
+    : 1;
+
+  const MetricCard = ({ label, value, sub, delta, delta2, color = '#e2e8f0' }: {
+    label: string; value: string; sub?: string; delta: number | null; delta2?: number | null; color?: string;
+  }) => (
+    <div style={{ background: '#0a1628', borderRadius: 8, padding: '14px 18px', border: '1px solid #1e293b', flex: 1, minWidth: 150 }}>
+      <div style={{ color: '#64748b', fontSize: '0.72em', marginBottom: 6 }}>{label}</div>
+      <div style={{ color, fontSize: '1.45em', fontWeight: 700, letterSpacing: '-0.5px', marginBottom: 4 }}>{value}</div>
+      {sub && <div style={{ color: '#475569', fontSize: '0.72em', marginBottom: 4 }}>{sub}</div>}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {delta !== null && <span style={{ fontSize: '0.72em', color: '#64748b' }}>vs '25: <DeltaBadge val={delta} /></span>}
+        {delta2 !== null && delta2 !== undefined && <span style={{ fontSize: '0.72em', color: '#64748b' }}>vs '24: <DeltaBadge val={delta2} /></span>}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ padding: '14px 16px', overflowY: 'auto', height: '100%' }}>
+      {/* Period selector */}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+        {WEEKLY_PRESETS.map(p => (
+          <button key={p.key}
+            style={{
+              padding: '4px 10px', borderRadius: 6, border: '1px solid',
+              borderColor: preset === p.key ? '#3b82f6' : '#1e293b',
+              background: preset === p.key ? '#1e3a5f' : '#0a1628',
+              color: preset === p.key ? '#93c5fd' : '#64748b',
+              fontSize: '0.75em', cursor: 'pointer',
+            }}
+            onClick={() => { setPreset(p.key); setNlqOpen(false); setTopOpen(true); }}>
+            {p.label}
+          </button>
+        ))}
+        {preset === 'custom' && (
+          <>
+            <input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)}
+              style={{ background: '#0a1628', border: '1px solid #1e293b', borderRadius: 6,
+                color: '#e2e8f0', padding: '3px 8px', fontSize: '0.75em' }} />
+            <span style={{ color: '#475569', alignSelf: 'center', fontSize: '0.8em' }}>—</span>
+            <input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)}
+              style={{ background: '#0a1628', border: '1px solid #1e293b', borderRadius: 6,
+                color: '#e2e8f0', padding: '3px 8px', fontSize: '0.75em' }} />
+          </>
+        )}
+      </div>
+
+      {/* Header + breadcrumb */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+        <h2 style={{ color: '#e2e8f0', fontSize: '1em', fontWeight: 700, margin: 0 }}>Продажи</h2>
+        {data && <span style={{ color: '#475569', fontSize: '0.8em' }}>{fmtDate(data.period.from)} — {fmtDate(data.period.to)}</span>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8, flexWrap: 'wrap' }}>
+          <span
+            style={{ color: wPath ? '#3b82f6' : '#e2e8f0', fontSize: '0.8em', cursor: wPath ? 'pointer' : 'default', fontWeight: wPath ? 400 : 600 }}
+            onClick={() => wPath && navigateUp(0)}>Все группы</span>
+          {pathParts.map((part, i) => (
+            <Fragment key={i}>
+              <span style={{ color: '#334155', fontSize: '0.8em' }}>/</span>
+              <span
+                style={{
+                  color: i < pathParts.length - 1 ? '#3b82f6' : '#e2e8f0',
+                  fontSize: '0.8em',
+                  cursor: i < pathParts.length - 1 ? 'pointer' : 'default',
+                  fontWeight: i === pathParts.length - 1 ? 600 : 400,
+                }}
+                onClick={() => { if (i < pathParts.length - 1) navigateUp(i + 1); }}
+              >{part}</span>
+            </Fragment>
+          ))}
+        </div>
+        {loading && <span className="spinner" style={{ width: 14, height: 14, marginLeft: 6 }} />}
+      </div>
+
+      {!loading && !data && <div style={{ color: '#64748b', padding: 24 }}>Нет данных</div>}
+
+      {data && (
+        <>
+          {/* Metric cards */}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+            <MetricCard
+              label="Продано, шт"
+              value={fmtNum(data.totals.qty_this)}
+              delta={pct(data.totals.qty_this, data.totals.qty_ly)}
+              delta2={pct(data.totals.qty_this, data.totals.qty_2y)}
+              color="#60a5fa"
+            />
+            <MetricCard
+              label="Выручка (по ценам каталога)"
+              value={fmtRev(data.totals.rev_this)}
+              delta={pct(data.totals.rev_this, data.totals.rev_ly)}
+              color="#22c55e"
+            />
+            <MetricCard
+              label="Активных SKU"
+              value={fmtNum(data.totals.sku_this)}
+              sub={`из ${fmtNum(data.totals.sku_ly)} год назад`}
+              delta={pct(data.totals.sku_this, data.totals.sku_ly)}
+              color="#e2e8f0"
+            />
+            {data.nlqSold.length > 0 && (
+              <MetricCard
+                label="Ожили неликвиды"
+                value={String(data.nlqSold.length)}
+                sub="товаров с паузой >60 дн"
+                delta={null}
+                color="#f59e0b"
+              />
+            )}
+          </div>
+
+          {/* Trend chart */}
+          {data.dailySales && data.dailySales.length > 0 && (
+            <div style={{ background: '#0a1628', borderRadius: 8, border: '1px solid #1e293b', marginBottom: 14, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', borderBottom: '1px solid #0f1f38' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{ color: '#94a3b8', fontSize: '0.72em' }}>Динамика</span>
+                  <div style={{ display: 'flex', gap: 3 }}>
+                    {(['qty', 'rev'] as const).map(m => (
+                      <button key={m}
+                        style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid',
+                          borderColor: chartMetric === m ? '#3b82f6' : '#1e293b',
+                          background: chartMetric === m ? '#1e3a5f' : 'transparent',
+                          color: chartMetric === m ? '#93c5fd' : '#475569',
+                          fontSize: '0.68em', cursor: 'pointer' }}
+                        onClick={() => setChartMetric(m)}>
+                        {m === 'qty' ? 'Шт' : 'Выручка'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <div style={{ width: 14, height: 2, background: '#3b82f6', borderRadius: 1 }} />
+                    <span style={{ color: '#334155', fontSize: '0.65em' }}>период</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <svg width={14} height={4} style={{ overflow: 'visible' }}>
+                      <line x1={0} y1={2} x2={14} y2={2} stroke="rgba(100,116,139,0.6)" strokeWidth="1.5" strokeDasharray="4 2" />
+                    </svg>
+                    <span style={{ color: '#334155', fontSize: '0.65em' }}>год назад</span>
+                  </div>
+                </div>
+              </div>
+              <div style={{ padding: '8px 12px 4px' }}>
+                <TrendChart
+                  dailySales={data.dailySales}
+                  dailySalesLY={data.dailySalesLY}
+                  from={data.period.from}
+                  to={data.period.to}
+                  metric={chartMetric}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Children breakdown bars — drill-down */}
+          {data.children.length > 0 && (
+            <div style={{ background: '#0a1628', borderRadius: 8, border: '1px solid #1e293b', marginBottom: 14, overflow: 'hidden' }}>
+              <div style={{ color: '#94a3b8', fontSize: '0.72em', padding: '10px 14px', borderBottom: '1px solid #0f1f38' }}>
+                {wPath ? 'Подгруппы' : 'По отделам'} ·{' '}
+                <span style={{ color: '#475569' }}>нажмите для drill-down</span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap' }}>
+                {/* Donut */}
+                <div style={{ padding: 14, borderRight: '1px solid #0f1f38', flexShrink: 0 }}>
+                  <GroupDonut groups={data.children} onDrill={drill} />
+                </div>
+                {/* Bars */}
+                <div style={{ flex: 1, padding: '12px 14px', minWidth: 180 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {data.children.map(g => {
+                      const d = pct(g.qty_this, g.qty_ly);
+                      const barThis = Math.round((g.qty_this / maxQty) * 100);
+                      const barLy   = Math.round((g.qty_ly   / maxQty) * 100);
+                      return (
+                        <div key={g.name}
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => drill(g.name)}
+                          onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.opacity = '0.7'; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.opacity = '1'; }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ color: '#cbd5e1', fontSize: '0.78em', minWidth: 160, maxWidth: 190,
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                              title={g.name}>{g.name}</span>
+                            <div style={{ flex: 1, position: 'relative', height: 14 }}>
+                              <div style={{ position: 'absolute', top: 0, left: 0, width: `${barLy}%`, height: '100%',
+                                background: 'rgba(100,116,139,0.25)', borderRadius: 3 }} />
+                              <div style={{ position: 'absolute', top: 1, left: 0, width: `${barThis}%`, height: 'calc(100% - 2px)',
+                                background: '#3b82f6', borderRadius: 3, transition: 'width .4s' }} />
+                            </div>
+                            <span style={{ color: '#94a3b8', fontSize: '0.72em', whiteSpace: 'nowrap', minWidth: 46, textAlign: 'right' }}>
+                              {fmtNum(g.qty_this)}
+                            </span>
+                            <DeltaBadge val={d} />
+                            <span style={{ color: '#334155', fontSize: '0.72em' }}>›</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Top items */}
+          {data.topItems.length > 0 && (
+            <div style={{ background: '#0a1628', borderRadius: 8, border: '1px solid #1e293b', overflow: 'hidden', marginBottom: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px',
+                cursor: 'pointer', borderBottom: topOpen ? '1px solid #1e293b' : 'none' }}
+                onClick={() => setTopOpen(v => !v)}>
+                <span style={{ color: '#60a5fa', fontWeight: 600, fontSize: '0.85em' }}>
+                  Топ товаров — {data.topItems.length} позиций
+                </span>
+                <span style={{ color: '#475569', fontSize: '0.85em' }}>{topOpen ? '▲' : '▼'}</span>
+              </div>
+              {topOpen && (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78em' }}>
+                    <thead>
+                      <tr style={{ background: '#060f1e' }}>
+                        {['Товар', 'Группа', 'Шт', "vs '25", 'Выручка'].map(h => (
+                          <th key={h} style={{ padding: '5px 10px', textAlign: h === 'Товар' || h === 'Группа' ? 'left' : 'right',
+                            color: '#475569', fontWeight: 500, whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.topItems.map((item, i) => (
+                        <tr key={item.item_code}
+                          style={{ borderBottom: '1px solid #0f1f38', background: i % 2 === 0 ? 'rgba(255,255,255,.01)' : undefined,
+                            cursor: onOpenCatalog ? 'pointer' : undefined }}
+                          onClick={() => onOpenCatalog?.(item.item_code)}
+                          onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'rgba(255,255,255,.04)'; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = i % 2 === 0 ? 'rgba(255,255,255,.01)' : ''; }}>
+                          <td style={{ padding: '5px 10px', color: '#e2e8f0', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                            title={item.item_name}>{item.item_name}</td>
+                          <td style={{ padding: '5px 10px', color: '#64748b', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                            title={item.group_l1}>{item.group_l1 || '—'}</td>
+                          <td style={{ padding: '5px 10px', textAlign: 'right', color: '#94a3b8', whiteSpace: 'nowrap' }}>{fmtNum(item.qty_this)}</td>
+                          <td style={{ padding: '5px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                            <DeltaBadge val={pct(item.qty_this, item.qty_ly)} />
+                          </td>
+                          <td style={{ padding: '5px 10px', textAlign: 'right', color: '#64748b', whiteSpace: 'nowrap' }}>
+                            {item.rev_this > 0 ? fmtRev(item.rev_this) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Non-liquid that sold */}
+          {data.nlqSold.length > 0 && (
+            <div style={{ background: '#0a1628', borderRadius: 8, border: '1px solid #1e293b', overflow: 'hidden', marginBottom: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px',
+                cursor: 'pointer', borderBottom: nlqOpen ? '1px solid #1e293b' : 'none' }}
+                onClick={() => setNlqOpen(v => !v)}>
+                <div>
+                  <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: '0.85em' }}>
+                    🌱 Ожили неликвиды — {data.nlqSold.length} товаров
+                  </span>
+                  <span style={{ color: '#475569', fontSize: '0.72em', marginLeft: 8 }}>
+                    товары с паузой {'>'} 60 дней, проданные на неделе
+                  </span>
+                </div>
+                <span style={{ color: '#475569', fontSize: '0.85em' }}>{nlqOpen ? '▲' : '▼'}</span>
+              </div>
+              {nlqOpen && (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78em' }}>
+                    <thead>
+                      <tr style={{ background: '#060f1e' }}>
+                        {['Товар', 'Отдел', 'Пауза', 'Шт', 'Выручка'].map(h => (
+                          <th key={h} style={{ padding: '5px 10px', textAlign: h === 'Товар' || h === 'Отдел' ? 'left' : 'right',
+                            color: '#475569', fontWeight: 500, whiteSpace: 'nowrap' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.nlqSold.map((item, i) => (
+                        <tr key={item.item_code}
+                          style={{ borderBottom: '1px solid #0f1f38', background: i % 2 === 0 ? 'rgba(255,255,255,.01)' : undefined,
+                            cursor: onOpenCatalog ? 'pointer' : undefined }}
+                          onClick={() => onOpenCatalog?.(item.item_code)}
+                          onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'rgba(255,255,255,.04)'; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = i % 2 === 0 ? 'rgba(255,255,255,.01)' : ''; }}>
+                          <td style={{ padding: '5px 10px', color: '#e2e8f0', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                            title={item.item_name}>{item.item_name}</td>
+                          <td style={{ padding: '5px 10px', color: '#64748b', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                            title={item.group_l1}>{item.group_l1 || '—'}</td>
+                          <td style={{ padding: '5px 10px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                            <span style={{ color: item.days_gap > 365 ? '#f87171' : item.days_gap > 180 ? '#f59e0b' : '#94a3b8',
+                              fontWeight: item.days_gap > 180 ? 600 : 400 }}>
+                              {item.days_gap} дн
+                            </span>
+                          </td>
+                          <td style={{ padding: '5px 10px', textAlign: 'right', color: '#94a3b8' }}>{item.net_qty}</td>
+                          <td style={{ padding: '5px 10px', textAlign: 'right', color: '#64748b', whiteSpace: 'nowrap' }}>
+                            {item.revenue > 0 ? fmtRev(item.revenue) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─ Main AnalyticsPage component ───────────────────────────────────────────────
-function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path: string, analyticsPath?: string) => void; initialPath?: string}) {
+function AnalyticsPage({onOpenCatalog, onOpenPreSeason, initialPath = ''}: {onOpenCatalog?: (path: string, analyticsPath?: string) => void; onOpenPreSeason?: () => void; initialPath?: string}) {
   // tree state
   const [treeOpen, setTreeOpen] = useState(true);
   const [treeCache, setTreeCache] = useState<Map<string,{children:{name:string;item_count:number}[];directItems:number}>>(new Map());
@@ -1982,9 +2681,20 @@ function AnalyticsPage({onOpenCatalog, initialPath = ''}: {onOpenCatalog?: (path
                 </div>
               ) : <AnalyticsDonut summary={summary} drillKey={drillKey} onDrill={drill}/>} 
               {summary.pre_season_count > 0 && (
-                <div style={{marginTop:10,padding:'6px 10px',background:'rgba(167,139,250,.1)',borderRadius:6,border:'1px solid #7c3aed',cursor:'pointer',fontSize:'0.78em',color:'#a78bfa'}}
-                  onClick={() => drill('pre_season')}>
-                  ↑ Предсезон: {summary.pre_season_count.toLocaleString('ru-RU')} товаров к заказу
+                <div style={{marginTop:10,borderRadius:6,border:'1px solid #7c3aed',overflow:'hidden',fontSize:'0.78em'}}>
+                  <div style={{padding:'6px 10px',background:'rgba(167,139,250,.1)',cursor:'pointer',color:'#a78bfa',display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}
+                    onClick={() => drill('pre_season')}>
+                    <span>↑ Предсезон: {summary.pre_season_count.toLocaleString('ru-RU')} товаров к заказу</span>
+                    <span style={{color:'#6d28d9',fontSize:'0.9em'}}>▾ список</span>
+                  </div>
+                  {onOpenPreSeason && (
+                    <div style={{padding:'5px 10px',background:'rgba(109,40,217,.15)',borderTop:'1px solid #4c1d95'}}>
+                      <button className="ghost-btn" style={{width:'100%',padding:'3px 0',color:'#c4b5fd',fontSize:'0.95em',fontWeight:500}}
+                        onClick={e=>{e.stopPropagation();onOpenPreSeason();}}>
+                        → Смотреть в каталоге
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2185,6 +2895,7 @@ export function App() {
   const [c2SortDir, setC2SortDir] = useState<'asc'|'desc'>('desc');
   const [c2HasStock, setC2HasStock] = useState(false);
   const [c2Supplier, setC2Supplier] = useState('');
+  const [c2PreSeason, setC2PreSeason] = useState(false);
   const [c2Suppliers, setC2Suppliers] = useState<string[]>([]);
   const [c2TreeSearch, setC2TreeSearch] = useState('');
   const [c2TreeSearchResults, setC2TreeSearchResults] = useState<C2GroupResult[]>([]);
@@ -2261,7 +2972,7 @@ export function App() {
     return path;
   }
 
-  async function c2LoadItems(path: string, q: string, offset: number, sortBy = c2SortBy, sortDir = c2SortDir, hasStock = c2HasStock, supplier = c2Supplier) {
+  async function c2LoadItems(path: string, q: string, offset: number, sortBy = c2SortBy, sortDir = c2SortDir, hasStock = c2HasStock, supplier = c2Supplier, preSeason = c2PreSeason) {
     const myId = ++c2ReqIdRef.current;
     const params = new URLSearchParams();
     if (path) params.set('path', path);
@@ -2272,6 +2983,7 @@ export function App() {
     params.set('sort_dir', sortDir);
     if (hasStock) params.set('has_stock', '1');
     if (supplier) params.set('supplier', supplier);
+    if (preSeason) params.set('pre_season', '1');
     setC2Loading(true);
     try {
       const data = await fetchJSON<Catalog2Response>(apiUrl(`/api/catalog2/items?${params}`));
@@ -2520,7 +3232,7 @@ export function App() {
     }
     setC2Offset(0);
     c2LoadItems(c2Path, c2Search, 0);
-  }, [tab, c2Path, c2Search, c2SortBy, c2SortDir, c2HasStock, c2Supplier]);
+  }, [tab, c2Path, c2Search, c2SortBy, c2SortDir, c2HasStock, c2Supplier, c2PreSeason]);
 
   // Load catalog2 suppliers on mount
   useEffect(() => {
@@ -2934,6 +3646,7 @@ export function App() {
           </button>
           <button className={tab === 'orders' ? 'tab active' : 'tab'} onClick={() => { setTab('orders'); navigateToTab('orders'); }}>Созданные заявки</button>
           <button className={tab === 'analytics' ? 'tab active' : 'tab'} onClick={() => { setTab('analytics'); navigateToTab('analytics'); }}>Аналитика</button>
+          <button className={tab === 'weekly' ? 'tab active' : 'tab'} onClick={() => { setTab('weekly'); navigateToTab('weekly'); }}>Неделя</button>
           <button className={tab === 'nonLiquid' ? 'tab active' : 'tab'} onClick={() => { setTab('nonLiquid'); navigateToTab('nonLiquid'); }}>Неликвиды</button>
           <button className={tab === 'decisions' ? 'tab active' : 'tab'} onClick={() => { setTab('decisions'); navigateToTab('decisions'); }}>Решения менеджеров</button>
         </div>
@@ -3835,6 +4548,14 @@ export function App() {
                     <span style={{color: '#64748b', fontSize: '0.8em', whiteSpace: 'nowrap'}}>Только с остатком</span>
                   </label>
                 </div>
+                {c2PreSeason && (
+                  <div style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px',background:'rgba(109,40,217,.15)',border:'1px solid #6d28d9',borderRadius:6,fontSize:'0.8em',color:'#c4b5fd'}}>
+                    <span>↑ Предсезонные товары</span>
+                    <button onClick={() => { setC2PreSeason(false); setC2Offset(0); }}
+                      style={{background:'none',border:'none',cursor:'pointer',color:'#7c3aed',fontSize:'1.1em',lineHeight:1,padding:'0 2px'}}
+                      title="Сбросить фильтр">×</button>
+                  </div>
+                )}
               </div>
 
               {/* Selection toolbar */}
@@ -4234,7 +4955,14 @@ export function App() {
 
         {/* ── ANALYTICS TAB ─────────────────────────────────────────────── */}
         {tab === 'analytics' && (
-          <AnalyticsPage initialPath={analyticsReturnPath} onOpenCatalog={async (path, analyticsPath) => { const resolved = await resolveCatalogPath(path || '', analyticsPath || ''); setAnalyticsReturnPath(analyticsPath || path || ''); setC2Path(resolved || path || ''); setTab('catalog2'); navigateToTab('catalog2'); }}/>
+          <AnalyticsPage initialPath={analyticsReturnPath}
+            onOpenCatalog={async (path, analyticsPath) => { const resolved = await resolveCatalogPath(path || '', analyticsPath || ''); setAnalyticsReturnPath(analyticsPath || path || ''); setC2Path(resolved || path || ''); setC2PreSeason(false); setTab('catalog2'); navigateToTab('catalog2'); }}
+            onOpenPreSeason={() => { setC2Path(''); setC2PreSeason(true); setAnalyticsReturnPath(''); setTab('catalog2'); navigateToTab('catalog2'); }}/>
+        )}
+
+        {/* ── WEEKLY REPORT TAB ─────────────────────────────────────────── */}
+        {tab === 'weekly' && (
+          <WeeklyReport onOpenCatalog={itemCode => { setC2Search(itemCode); setC2Path(''); setTab('catalog2'); navigateToTab('catalog2'); }} />
         )}
 
       </main>
